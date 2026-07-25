@@ -41,6 +41,14 @@
     #legend .sw { width: 22px; height: 10px; border-radius: 2px; }
     #legend h4 { margin: 0 0 5px; font-size: 11px; letter-spacing: .06em;
       text-transform: uppercase; color: var(--dim); font-weight: 600; }
+    /* MapLibre ships compact attribution but also adds -show, which forces the text open.
+       Override that: collapse to just the (i), and reveal on hover or click (<details open>). */
+    .maplibregl-ctrl-attrib.maplibregl-compact-show { padding: 2px 24px 2px 0; }
+    .maplibregl-ctrl-attrib.maplibregl-compact-show .maplibregl-ctrl-attrib-inner { display: none; }
+    .maplibregl-ctrl-attrib.maplibregl-compact:hover .maplibregl-ctrl-attrib-inner,
+    .maplibregl-ctrl-attrib.maplibregl-compact[open] .maplibregl-ctrl-attrib-inner { display: block; }
+    .maplibregl-ctrl-attrib.maplibregl-compact:hover,
+    .maplibregl-ctrl-attrib.maplibregl-compact[open] { padding: 2px 28px 2px 8px; }
     .maplibregl-popup-content { background: #12161d; color: var(--ink);
       border-radius: 8px; border: 1px solid rgba(255,255,255,.12); }
     .maplibregl-popup-content b { color: #fff; }
@@ -71,7 +79,7 @@
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
-const BUILD = 21;                                     // bump on every change — shown in the UI
+const BUILD = 25;                                     // bump on every change — shown in the UI
 const OFM = 'https://tiles.openfreemap.org';        // free vector tiles, no key
 // Satellite (removed for now to keep the layer count minimal; re-add as a raster source +
 // layer when wanted): https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}
@@ -200,6 +208,9 @@ const map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 map.addControl(new maplibregl.AttributionControl({ compact: true }), 'top-right');
+// MapLibre renders the attribution <details> already open, so it shows as a wide pill. Close it
+// once so it starts as just the (i); clicking/tapping the (i) still toggles it open (see CSS).
+map.on('load', () => document.querySelector('.maplibregl-ctrl-attrib')?.removeAttribute('open'));
 // Always on: an invalid paint expression once silently dropped an entire layer, and only the
 // error event revealed it.
 map.on('error', e => console.error('MAP ERROR:', e.error?.message || e));
@@ -283,6 +294,14 @@ function buildLegend() {
 function wireControls() {
   document.getElementById('play').onclick = () => (timer ? pause() : play());
   document.getElementById('scrub').oninput = e => { pause(); show(+e.target.value); };
+  // Pointer cursor over a clickable fire (a point query, not a viewport-wide one — those are
+  // costly and nudge MapLibre's render state). Empty string restores the default grab hand.
+  map.on('mousemove', e => {
+    const over = map.queryRenderedFeatures(e.point, { layers })
+      .some(f => f.properties.year <= years[idx]);
+    map.getCanvas().style.cursor = over ? 'pointer' : '';
+  });
+
   // A click parks the animation on the year it is showing and, if a fire was hit, names it.
   // Panning and zooming work at all times, playing or paused — there is no separate mode.
   map.on('click', e => {
