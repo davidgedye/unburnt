@@ -79,7 +79,7 @@
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
-const BUILD = 25;                                     // bump on every change — shown in the UI
+const BUILD = 'dev';                                 // CI rewrites this line to the commit SHA
 const OFM = 'https://tiles.openfreemap.org';        // free vector tiles, no key
 // Satellite (removed for now to keep the layer count minimal; re-add as a raster source +
 // layer when wanted): https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}
@@ -198,7 +198,7 @@ const DS = DATASETS[q.get('data')] || DATASETS.west;
 const DEBUG = q.has('debug');
 const YEAR_MS = 750;                       // one year per 0.75s of screen time
 
-function dlog(...a) { if (DEBUG) console.log(`[b${BUILD}]`, ...a); }
+function dlog(...a) { if (DEBUG) console.log(`[${BUILD}]`, ...a); }
 
 const map = new maplibregl.Map({
   container: 'map', style,

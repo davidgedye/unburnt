@@ -43,6 +43,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+
+      # Stamp the page with the commit it was built from, so the `build` string in the UI
+      # identifies the exact source and a stale cached copy is obvious at a glance. The working
+      # copy says 'dev'; only the deployed artifact carries a SHA. Nothing is committed back.
+      - name: Stamp build with commit SHA
+        run: |
+          # Fail loudly rather than silently shipping an unstamped page if the line is renamed.
+          grep -q "^const BUILD = " app/index.html
+          sed -i "s|^const BUILD = .*|const BUILD = '${GITHUB_SHA:0:7}';|" app/index.html
+          grep -n "^const BUILD = " app/index.html
+
       - run: npx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
