@@ -184,9 +184,11 @@ plan. Roughly in order:
   answer (translucent stacking reads as mud); needs a MapLibre sort key on year.
 - **WFIGS historical supplement** — out of v1 (MTBS-only scope), revisit in v1.1: it catches
   sub-1,000-acre fires and the not-yet-finalized current season.
-- **Pages vs. Workers static assets** — Cloudflare froze Pages feature development (2025)
-  and steers new projects toward Workers static assets. Decide at scaffolding time; either
-  serves a static MapLibre frontend fine.
+- ~~**Pages vs. Workers static assets**~~ **resolved (2026-07-25): Workers static assets.**
+  Assets-only config in `wrangler.jsonc` (no Worker script). Chosen because Cloudflare froze
+  Pages development in 2025, and because adding a Worker later (R2 tile route, live-data proxy)
+  needs only `main` + `assets.binding` rather than a migration. GitHub Pages was considered and
+  rejected: git's 100 MB file cap rules out the eventual severity PMTiles archive.
 - **Legend honesty** — MTBS classes are analyst-thresholded per fire, and the most recent
   seasons mix Initial and Extended assessments. Translate classes into hiker terms (shade
   loss, deadfall risk, canopy loss) rather than presenting raw remote-sensing bins.

@@ -3,3 +3,7 @@ pipeline/data/
 
 # Local Claude Code settings
 .claude/settings.local.json
+
+# Cloudflare / node
+node_modules/
+.wrangler/

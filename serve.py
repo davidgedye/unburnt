@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Dev server for the fire visualization.
+"""Dev server for the fire visualization (serves ./app).
 
 Plain `python3 -m http.server` lets the browser cache index.html, which makes it easy to test
 stale code without realizing it. This sends no-store on everything so a normal reload always
 picks up the latest build (cross-check the `build N` stamp shown in the app's title panel).
+
+Lives at the repo root, not inside app/, so that app/ contains only files fit to publish —
+the whole directory is uploaded verbatim as Cloudflare Workers static assets.
 
 Usage: python3 serve.py [port]     (default 8090)
 """
@@ -12,6 +15,9 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
 class NoCacheHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, directory='app', **kw)
+
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
         self.send_header('Pragma', 'no-cache')
@@ -25,5 +31,5 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
 
 if __name__ == '__main__':
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8090
-    print(f'serving {__file__.rsplit("/", 1)[0]} on http://localhost:{port}/index.html (no-cache)')
+    print(f'serving ./app on http://localhost:{port}/index.html (no-cache)')
     ThreadingHTTPServer(('', port), NoCacheHandler).serve_forever()

@@ -1,0 +1,13 @@
+{
+  "name": "unburnt",
+  "private": true,
+  "description": "40 years of Western US wildfire \u2014 static Cloudflare Workers site",
+  "scripts": {
+    "dev": "python3 serve.py",
+    "deploy": "wrangler deploy",
+    "check": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

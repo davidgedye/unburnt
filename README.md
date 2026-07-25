@@ -30,10 +30,13 @@ Working app covering **all 11 Western states, 1984–2024** — see `app/`:
 - **No modes:** a click parks the animation on the year it is showing and names the fire you
   clicked; pan and zoom work at all times, playing or paused.
 
-Run it: `cd app && python3 serve.py` → `http://localhost:8090/index.html`
+Run it locally: `npm run dev` (or `python3 serve.py`) → `http://localhost:8090/index.html`
 (URL params: `?data=west|wa`, `?lng=&lat=&z=`, `?year=1995`, `?debug=1`).
 Use `serve.py` rather than `python3 -m http.server`: it sends `no-store`, so a reload always
 picks up the latest build. Cross-check the `build N` stamp in the title panel.
+
+**Deploy:** `npm run deploy` (after `npx wrangler login` once). `npm run check` validates the
+config without deploying. Hosting is **Cloudflare Workers static assets** — see "Hosting" below.
 
 **Data coverage** (verified 2026-07-25 against the July 2026 MTBS perimeter release):
 perimeters are complete for **41 years × all 11 states** — CA 1,956 · ID 1,623 · AZ 1,435 ·
@@ -88,6 +91,24 @@ Consequences that matter:
 `animation-plan.md` carries the full rationale, the accepted tradeoffs, and a "Debugging history"
 section listing the wrong turns (and the MapLibre traps behind them) so they aren't repeated.
 
+## Hosting
+
+**Cloudflare Workers static assets**, configured in `wrangler.jsonc`. Assets-only: there is no
+Worker script, so `wrangler.jsonc` has no `main`. The whole of `app/` is uploaded verbatim, which
+is why `serve.py` lives at the repo root rather than inside it.
+
+- **Why Workers rather than Pages:** Cloudflare froze Pages feature development in 2025 and
+  steers new projects to Workers static assets. Adding a Worker later (an R2-backed tile route,
+  or a proxy for live fire/smoke data) means adding `main` and an `assets.binding` — no migration.
+- **Why not GitHub Pages:** fine today, but git rejects files over 100 MB (and Pages serves LFS
+  pointers, not content), so the eventual severity PMTiles archive — estimated at low hundreds of
+  MB — could never live there. Response headers also aren't configurable.
+- **Caching:** Workers static assets default to `Cache-Control: public, max-age=0,
+  must-revalidate`, so browsers revalidate before use. That's what this project wants, so there
+  is no `_headers` file.
+- **Asset limits to remember:** 20,000 files and **25 MiB per file**. The current datasets
+  (2.8 MB + 672 KB) are fine; a large PMTiles archive is not, which is what R2 is for.
+
 ## Files
 
 - `animation-plan.md` — **the current plan.** Modes, animation engine, color model, base-map
@@ -101,5 +122,7 @@ section listing the wrong turns (and the MapLibre traps behind them) so they are
   visualization needs a bland *vector* base, which is Option B/C in that doc.
 - `pipeline/pipeline-validation.md` — the 2026-07-23 end-to-end vectorization run (WA × 2023/24)
   that proved the severity pipeline, with timings and the mosaic-lag finding.
-- `app/` — the working app: one HTML file, gzipped GeoJSON datasets (11-state and WA),
-  and `serve.py`, a no-cache dev server.
+- `app/` — the deployed site: one HTML file plus gzipped GeoJSON datasets (11-state and WA).
+  Everything here is published as-is.
+- `serve.py` — no-cache local dev server (serves `./app`); `wrangler.jsonc`, `package.json` —
+  Cloudflare deploy config.

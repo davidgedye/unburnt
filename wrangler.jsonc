@@ -1,0 +1,17 @@
+{
+  // Cloudflare Workers static assets (not Pages — Cloudflare froze Pages feature development
+  // in 2025 and steers new projects here). Assets-only: there is no Worker script, so there is
+  // no `main`. Adding one later (e.g. an R2-backed tile route, or a proxy for live fire/smoke
+  // data) means adding `main` plus an `assets.binding` — no migration.
+  //
+  // Caching: Workers static assets default to `Cache-Control: public, max-age=0,
+  // must-revalidate`, i.e. the browser revalidates before use. That is exactly what this project
+  // wants — stale cached builds cost real debugging time — so no `_headers` file is needed.
+  //
+  // Deploy: `npm run deploy` (see package.json). Requires `npx wrangler login` once.
+  "name": "unburnt",
+  "compatibility_date": "2026-07-25",
+  "assets": {
+    "directory": "./app"
+  }
+}
