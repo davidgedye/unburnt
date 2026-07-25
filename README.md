@@ -35,8 +35,10 @@ Run it locally: `npm run dev` (or `python3 serve.py`) → `http://localhost:8090
 Use `serve.py` rather than `python3 -m http.server`: it sends `no-store`, so a reload always
 picks up the latest build. Cross-check the `build N` stamp in the title panel.
 
-**Deploy:** `npm run deploy` (after `npx wrangler login` once). `npm run check` validates the
-config without deploying. Hosting is **Cloudflare Workers static assets** — see "Hosting" below.
+**Deploy:** automatic — every push to `main` triggers `.github/workflows/deploy.yml`, which
+deploys to Cloudflare. Manual runs are available from the Actions tab. `npm run deploy` still
+works locally (needs `npx wrangler login`), and `npm run check` validates the config without
+deploying or authenticating. Hosting is **Cloudflare Workers static assets** — see "Hosting" below.
 
 **Data coverage** (verified 2026-07-25 against the July 2026 MTBS perimeter release):
 perimeters are complete for **41 years × all 11 states** — CA 1,956 · ID 1,623 · AZ 1,435 ·
@@ -103,6 +105,8 @@ is why `serve.py` lives at the repo root rather than inside it.
 - **Why not GitHub Pages:** fine today, but git rejects files over 100 MB (and Pages serves LFS
   pointers, not content), so the eventual severity PMTiles archive — estimated at low hundreds of
   MB — could never live there. Response headers also aren't configurable.
+- **CI:** GitHub Actions (`cloudflare/wrangler-action`) deploys on push to `main`. The only
+  secret required is `CLOUDFLARE_API_TOKEN`; no build step and no `npm ci` are needed.
 - **Caching:** Workers static assets default to `Cache-Control: public, max-age=0,
   must-revalidate`, so browsers revalidate before use. That's what this project wants, so there
   is no `_headers` file.

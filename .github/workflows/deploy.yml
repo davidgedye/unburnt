@@ -1,0 +1,38 @@
+# Deploy the site to Cloudflare Workers static assets on every push to main.
+#
+# No build step and no `npm ci`: wrangler-action installs Wrangler itself (defaulting to v4,
+# matching the devDependency in package.json) and reads wrangler.jsonc, which is assets-only.
+#
+# Requires one repository secret:
+#   CLOUDFLARE_API_TOKEN  — Cloudflare dashboard → My Profile → API Tokens →
+#                           Create Token → "Edit Cloudflare Workers" template.
+# Add CLOUDFLARE_ACCOUNT_ID as a second secret (and pass it below as `accountId`) only if the
+# token can see more than one Cloudflare account, in which case the deploy fails asking you to
+# disambiguate.
+#
+# To deploy only when the site actually changes, add a paths filter under `push:`
+# (e.g. app/**, wrangler.jsonc, package.json). Left off deliberately: every push to main
+# deploying is easier to reason about than wondering why a deploy didn't happen.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # manual runs from the Actions tab
+
+permissions:
+  contents: read
+
+concurrency:                # never let two deploys race; newest push wins
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
