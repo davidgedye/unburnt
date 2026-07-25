@@ -3,10 +3,10 @@
 ## What this is
 
 A visualization of **every Western US wildfire in the ~40-year MTBS record (1984–present)**.
-On load, an animation plays the whole record: each fire flares on its real ignition date, then
-fades with age without disappearing, so the run accumulates into one picture of four decades of
-burning. Afterward the user explores the result, with burn **severity** available in a separate
-at-rest view.
+On load, an animation steps through the record one year at a time: each year's fires appear at
+full intensity, then fade with age without disappearing, so the run accumulates into one picture
+of four decades of burning, which is where it stops. There are no modes: a click parks the
+animation on the year it is showing, and panning and zooming work throughout.
 
 This supersedes the project's original framing as a hike-planning tool. The
 data/pipeline/architecture decisions in `recommendation.md` still hold (MTBS + WFIGS →
@@ -21,151 +21,164 @@ vectorized PMTiles on R2, MapLibre GL JS, Cloudflare); this doc supersedes its *
 |---|---|
 | Time window | **The full MTBS record, ~40 years.** Currently **1984–2024**; extends forward as MTBS finalizes each season. 2025 exists but is far too sparse to include (see caveats) |
 | Geographic scope | **11 Western states** (WA, OR, CA, ID, NV, UT, AZ, MT, WY, CO, NM) — **built**, 11,377 fires. WA (643) kept as a lighter dataset |
-| Animation fade model | **Accumulate & fade** — a fire stays on the map after its season, dimming with age toward a still-visible ember floor; the final frame shows all 40 years at once |
-| At-rest view | **Severity, manual toggle** — the animation ends on its final frame and holds; a control switches to a static severity view |
-| Fire mark | **Filled perimeter + glow** — the real perimeter polygon, plus a centroid bloom at ignition so small fires register at multi-state zoom |
-| Map stack | **MapLibre GL JS.** No account, token, or metered billing. Satellite from free public raster (Esri World Imagery / USGS Imagery) — Mapbox not needed |
-| Base map | Bland at overview zoom, but **a true scalable map**: progressively more detail as you zoom, plus layer toggles |
-| Efficiency | **A requirement, not polish.** Must run on phones while showing all 11 states (**11,377** perimeters, 1984–2024) |
+| Animation granularity | **One state per year** — 41 discrete states, 0.75 s each (~31 s total). No within-year ignition timing |
+| Animation fade model | **Accumulate & fade** — a year's fires stay on the map, dimming with age toward a still-visible ember floor; the final frame shows all 40 years at once |
+| Interaction | **No modes.** A click (or a scrubber drag) parks the animation on the year it is showing; panning and zooming work at all times |
+| Fire mark | **Filled perimeter polygon only.** No glow — see "Why the glow is gone" |
+| Map stack | **MapLibre GL JS.** No account, token, or metered billing |
+| Base map | Bland at overview zoom, progressively more detail as you zoom |
+| Geometry detail | **~200 m simplification (`-simplify 0.002`)** — settled; finer variants were built but proved unnecessary in practice |
 
 The base map is **decoupled** from the animation/data layers, so swapping it later (even to
 Mapbox/MapTiler) touches only the base style — nothing in the animation engine.
 
-## Two view modes
+## Interaction — one mode only
 
-### Mode 1 — Animation (recency), the default on startup
-- **~0.75 s per year** — about **31 s** for the current 41 seasons. Plays on load,
-  re-triggerable via Replay, with pause and a draggable scrubber.
-- A time cursor sweeps `Y0 → Y1`. Each fire **flares** at its actual ignition date, in an
-  intense hot color, then **fades with age** toward a dim ember floor but never vanishes.
-- Color encodes **recency only** — severity is not shown here.
-- The base map is at its blandest: dark ground, state boundaries, coastline.
-- Ends on the final frame — all 40 years visible, recent fires hot, 1984 fires faint — and
-  holds there.
+There is no animation/explore split. The map is always live:
 
-**Pace note:** the pace is *per year* (0.75 s/yr), so total duration grows as the record grows
-(~31 s now, ~45 s if the window were ~60 years). The alternative — a fixed 45 s total — was
-considered and rejected for now: constant per-year pace keeps "the speed of time" legible.
+- **Plays on load** — 41 yearly states, 0.75 s each ≈ 31 s.
+- **A click parks it** on the year currently showing, and names the fire clicked (if any).
+  Fires from years not yet reached are ignored by the hit test.
+- **The scrubber** pauses and jumps to any year; it snaps to whole years.
+- **Play/pause/replay** is one button. After the last year, play restarts from 1984.
+- **Pan and zoom work throughout**, playing or paused — MapLibre never blocked them, which is
+  why a separate "explore mode" turned out to be unnecessary.
+- `?year=1995` parks on a given year, for sharing or testing.
 
-### Mode 2 — At-rest (severity), reached by toggle
-- The static all-fires picture colored by **MTBS burn severity** (low / moderate / high).
-- Full zoom/pan, progressive base-map detail, optional **satellite** raster.
-- Click a fire → name, date, acreage, assessment type (severity breakdown once available).
-- A control returns to Mode 1 and replays.
+Colour encodes **recency only**. The final state — all 41 years, 2024 hot, 1984 faint — is
+simply where the animation stops.
 
-**Current state:** Explore mode colors fires **by year**, not severity — severity requires the
-raster half of the pipeline, which isn't built yet. The legend says so in the app.
+**Pace note:** the pace is *per year* (0.75 s/yr), so total duration grows as the record grows.
+A fixed total duration was considered and rejected: constant per-year pace keeps "the speed of
+time" legible.
+
+**Future:** MTBS burn **severity** colouring, once the raster half of the pipeline is built.
+That was the original reason to keep severity data; it is not wired up yet. It would most likely
+arrive as a second colour table applied when the animation is parked, not as a new mode.
 
 ## Base map design
 
-MapLibre GL JS, composed of independent, individually-styleable layers so "bland" and "rich"
-are visibility/opacity settings rather than different maps. Detail tiers in by zoom:
+MapLibre GL JS, composed of independent, individually-styleable layers. Detail tiers in by zoom:
 
 | Zoom | What appears |
 |---|---|
-| ≲ 5 (continental) | Dark ground, state boundaries, **coastline/shoreline** — the animation backdrop |
+| ≲ 4 (continental) | Dark ground, state boundaries, coastline, interstates — the animation backdrop |
 | ~5–8 (state) | Cities and towns, major rivers |
 | ~9–11 | Villages, hamlets, neighborhoods; forest/park shading; secondary roads |
 | ~11–13 | Streams, canals; minor roads |
 | 13+ | Buildings |
 
-- **Source:** currently **OpenFreeMap** hosted vector tiles (free, no key — the low-effort
-  path). Upgrade path: a **Protomaps extract of the 11 Western states** on R2, same
-  PMTiles-on-R2 serving as the fire data. Swap is additive; layer definitions barely change.
-- **Coastline** is drawn as an explicit stroke, not implied by a fill contrast — at overview
-  zoom the land/water edge must read as clearly as the state lines.
-- **Toggles:** Cities / Rivers / Roads / Satellite, each switching a whole tier group.
-- **Satellite** is a raster layer, off by default (Esri World Imagery; USGS Imagery is the
-  public-domain alternative). Boundaries brighten when it's on.
-- Max zoom 17, so the deep detail has room to exist.
+- **Source:** **OpenFreeMap** hosted vector tiles (free, no key). Upgrade path: a **Protomaps
+  extract of the 11 Western states** on R2, same PMTiles-on-R2 serving as the fire data.
+- **Coastline** is an explicit stroke, so the land/water edge reads as clearly as state lines.
+- **No user-facing layer toggles** — these are styling decisions, not user choices.
+- **Satellite removed.** It was wired up but never used; re-add as a raster source + layer when
+  wanted (Esri World Imagery / USGS Imagery are both free and keyless).
+- **Base tiles stop at z14.** Past that the base is stretched, not resampled — inherent to
+  OpenFreeMap, and the reason the Protomaps extract is the eventual fix.
 
 ## Animation engine
 
-### Timeline
-- `Y0` = Jan 1 of the earliest fire year, `Y1` = Dec 31 of the latest; both derived **from the
-  data**, not hardcoded — the window extends automatically as MTBS publishes new seasons.
-- Animation clock maps linearly to `currentDays` (days since `Y0`). Linear calendar time; each
-  year gets the same on-screen duration.
+### The whole design in one paragraph
 
-### Per-fire data
-Each perimeter feature carries `event_days` (ignition date as days since `Y0`, from MTBS
-`ig_date`), `year`, `acres`, `name`, `type`, `asmnt`, and — for Mode 2 — severity attributes.
-
-### Color / intensity model (Mode 1)
-`age = currentDays − event_days`; `age < 0` → hidden. The ramp (hot flare → still-visible
-ember floor):
+The animation's entire state is **one integer**: `idx`, the index of the year on show. Two
+lookup tables — `COLOR[age]` and `OPACITY[age]`, indexed by age *in years* — are built once at
+startup from six anchor stops. There is **one fill layer per ignition year** with a static
+filter, and showing a state is a single loop that assigns each layer a **constant** colour and
+opacity by its age (`idx - k`), hiding years that haven't happened yet. Play is `setInterval`
+at 750 ms; pause is `clearInterval`.
 
 ```
-age      fill color   fill opacity
-0d       #fff2b0      0.95
-30d      #ffcf40
-120d     #ff9526      0.85
-1yr      #ff5f1a      0.75
-3yr      #e83c17      0.65
-8yr      #b23016      0.58
-40yr+    #8f2a15      0.55   (ember floor — never invisible)
+function show(i) {
+  idx = clamp(i, 0, N - 1);
+  for (let k = 0; k < N; k++) {
+    const a = min(idx - k, AGES - 1);          // age of year k, in years
+    setPaintProperty(layers[k], 'fill-opacity', a < 0 ? 0 : OPACITY[a]);
+    if (a >= 0) setPaintProperty(layers[k], 'fill-color', COLOR[a]);
+  }
+}
+```
+
+### Why this shape
+
+- **Every paint value is a constant scalar** — a GPU uniform. Nothing is *data-driven* (no
+  paint property reads a feature attribute), so no per-vertex attribute buffers are ever
+  recomputed or re-uploaded.
+- **41 discrete states**, so the entire state space can be enumerated and asserted.
+- **No continuous time**: no elapsed-time maths, no `requestAnimationFrame`, no quantisation,
+  no change detection, no orphaned-loop guard. `clearInterval` cannot leave a loop running.
+- **One colour model**, in JS, as tables — not duplicated as a GL expression, and not
+  duplicated again for a second view mode.
+- MapLibre's default 300 ms paint transition cross-fades between yearly steps **for free**.
+
+### Palette
+
+Anchors (age in years → colour, opacity), interpolated once into 41-entry tables:
+
+```
+0 yr   #fff2b0  0.95    this year — flare
+1 yr   #ff9526  0.85
+3 yr   #ff5f1a  0.75
+8 yr   #e83c17  0.66
+20 yr  #b23016  0.59
+40 yr  #8f2a15  0.55    ember floor — never invisible
 ```
 
 The floor matters: an earlier version faded old fires to near-black, which made them vanish
 against the dark base and left the end frame nearly empty.
 
-**Draw order:** newest-on-top, so reburned areas don't turn to mud. This falls out of adding
-the per-year layers in ascending year order (no sort key needed).
+**Draw order:** layers are added oldest-year-first, so newer fires draw on top and reburns don't
+turn to mud. No sort key needed.
 
-### Performance architecture (the load-bearing part)
+### Why one layer per year (and not age bands)
 
-The expensive operation in MapLibre is changing a **data-driven** paint property — one that
-reads a feature attribute. Each change re-derives and re-uploads per-vertex attribute buffers
-for every feature in every loaded tile. The first implementation set four such properties
-(fill color/opacity, line color/opacity) across **~87k vertices every frame**: measured
-**4.5 fps**, with the canvas falling far behind the clock and fires still arriving long after
-the timeline finished.
-
-The current design:
-
-1. **One fill layer per ignition year**, each with a **static** filter (`year == Y`) and
-   **constant scalar** paint values — GPU uniforms, zero per-vertex work. Advancing time is a
-   handful of scalar `setPaintProperty` calls.
-2. **Change detection** — a layer is only touched when its computed color/opacity would
-   actually differ from what's applied.
-3. **Data-driven paint for the active season only**, so each fire in the current year still
-   appears on its exact ignition date at full flare heat. Cost is bounded to one year of
-   geometry.
-4. **Quantized GL updates** — ~20 simulated days per update (≈40 ms at 0.75 s/yr, below
-   perception). The clock/scrubber DOM still updates every frame.
-5. **Glow via a tiny source** — the glow layer's source holds *only* currently-flaring fires,
-   rebuilt per step; its paint is a static expression (`['get','glow']`) that never changes.
-   Scales to any dataset size, since only a handful of fires flare at once.
-6. **No per-fire outlines during the animation** — they doubled vertex cost for little visual
-   gain. Explore mode keeps them (static, so they cost nothing per frame).
-7. **A single generation token** guards the play loop, so only the newest run can drive frames
-   (an earlier version could leave orphaned loops running, stacking extra sweeps).
-
-This scales with the number of **years** (~40 layers), not the number of fires — which is what
-makes the 11-state, 11,377-perimeter target viable on a phone.
+A layer's colour depends only on its year, so it never needs a per-feature expression. Using
+~6 *age bands* instead would require fires to migrate between layers as time advances — which
+means changing filters, which forces re-layout. Far worse. 41 layers is the cheap option.
 
 ### Accepted tradeoffs
-- **Completed seasons fade per-year, not per-fire.** All fires in a finished season share one
-  color/opacity, aged from a **mid-season reference (Aug 1)** — the typical Western ignition
-  window. Error is at most a few months on a ramp spanning decades; invisible in practice. The
-  *active* season is exact.
-- **Time advances in ~20-day quanta** for GL updates (clock text stays smooth).
-- **~40 fill layers** instead of one. More layers means more draw calls per frame, but each is
-  cheap and unchanging — a far better trade than per-vertex re-uploads.
+- **No within-year ignition timing.** A year's fires appear together. (Earlier builds animated
+  exact ignition dates via a data-driven expression on the active season; that expression was
+  the source of a long-running bug — see below.)
+- **The scrubber snaps to whole years.**
+- **Completed and current years share one model**, so the newest year sits at the brightest
+  colour while at rest. That is intended: newest = hottest.
 
-### Verification status
-The rewrite is in place but **unconfirmed on real hardware**: the dev sandbox renders in
-software with no GPU, where measurements (4.5 → 6.5 fps) can't distinguish the designs. Needs
-a look on the actual machine, and eventually a phone. If fires still trail the clock there, the
-next suspect is the **base-map layer count** (forest fills, buildings, streams, label layers)
-rather than the fire layers.
+## Debugging history — mistakes worth not repeating
+
+The engine went through several wrong turns. Each left a lesson in the code:
+
+1. **Data-driven paint every frame (4.5 fps).** The first version set four data-driven paint
+   properties (fill/line colour and opacity) per frame across ~87k vertices. Each change
+   re-derives and re-uploads per-vertex attribute buffers for every feature in every tile.
+   *Lesson: constant paint = uniform = free; data-driven paint = per-vertex work.*
+2. **`setData` per step (the big one).** A "cheap" flare glow rebuilt its GeoJSON source ~24×/s
+   to hold only currently-flaring fires. **Every `setData` re-tiles the whole source in the
+   worker**, so a run queued hundreds of layout jobs that kept draining — and replaying stale
+   blooms — for minutes after the clock stopped. This produced the "fires keep flashing long
+   after the end" symptom. *Lesson: never mutate a source to animate; change paint instead —
+   or better, don't animate that thing at all.*
+3. **A layer added with `visibility: 'none'` is never laid out.** The old Explore layer was
+   created hidden; MapLibre skips layout for hidden layers, and flipping visibility later does
+   not re-run it. The layer was visible but held **zero features**, so clicking the map wiped
+   all fires. *Lesson: don't gate a layer's existence on initial visibility.*
+4. **An invalid paint expression silently drops the whole layer.** Multiplying two
+   `interpolate`s for the glow radius (`['*', interpolate…, interpolate…]`) is invalid — `zoom`
+   may only be the input to a *top-level* interpolate/step. The layer failed to load and
+   nothing said so until `map.on('error')` was wired up. *`map.on('error')` is now always on.*
+5. **Stale builds wasted real time.** Browser caching and leftover headless-browser processes
+   (Chrome replays buffered console output on `Runtime.enable`) produced "verifications" of code
+   that wasn't running. *Hence `serve.py` (sends `no-store`) and a `BUILD` number shown in the
+   UI and stamped on every debug log line.*
+
+**Why the glow is gone:** it caused (2), it caused (4), and it was the visible symptom of both.
+Removed entirely rather than debugged further. Fires are now just their perimeters.
 
 ## Build pipeline
 
 ### Perimeters — ✅ built (drives the animation)
 
-The MTBS perimeter shapefile is one national file, so no per-state download. One `ogr2ogr`
-command filters to the 11 states × 1984–2024 and reprojects:
+The MTBS perimeter shapefile is one national file, so no per-state download:
 
 ```
 ogr2ogr -f GeoJSON west_fires.geojson -t_srs EPSG:4326 \
@@ -178,59 +191,102 @@ ogr2ogr -f GeoJSON west_fires.geojson -t_srs EPSG:4326 \
 ```
 
 State attribution uses the `event_id` prefix (where the fire started), which is why the data
-stops cleanly at state lines. `event_days`/`year` are derived client-side from `ig_date`.
+stops cleanly at state lines. `year` is derived client-side from `ig_date`.
 
-**Simplification chosen: `0.002°` (~200 m).** Measured tradeoff across the 11 states:
+Datasets ship **gzipped and are inflated in the browser** (`DecompressionStream`), so a static
+host needs no content-encoding config; gzip magic-byte detection means it also works if the host
+*does* send `Content-Encoding: gzip`.
+
+### Simplification — why, how, and what it costs
+
+**Why it's necessary.** MTBS derives perimeters from 30 m Landsat pixels, so boundaries trace
+pixel edges in tiny stair-steps. The unsimplified 11-state extract is **476 MB / 17.8 M
+vertices**. One fire is a pathological outlier: **NORTH (2020-08-02)**, only 6,827 acres,
+carries **2,030,049 vertices** — a perimeter so crenulated it exceeds GDAL's default per-feature
+read limit — while the 979,722-acre **Dixie** fire needs ~1,000.
+
+**Two independent levers:**
+
+1. **`-simplify 0.002`** — the big win. Douglas–Peucker: chord a line's endpoints, find the
+   furthest vertex; if it exceeds the tolerance keep it and recurse, else discard every
+   intermediate vertex.
+2. **`-lco COORDINATE_PRECISION=4`** — trims bytes, not geometry. GDAL defaults to 7 decimals
+   (~1 cm), absurd for 30 m source data; 4 decimals is ~11 m.
+
+**Tolerance-units gotcha:** `0.002` is **degrees, not meters** (output is EPSG:4326). North–south
+that's ~222 m everywhere; east–west it shrinks with latitude — ~190 m in southern AZ vs ~145 m
+at the Canadian border. Simplifying in a projected CRS (the source's Albers) would give uniform
+meters if this ever needs to be exact.
+
+**Tolerance chosen: `0.002°` (~200 m).** Measured across the 11 states:
 
 | `-simplify` | raw | gzipped | vertices |
 |---|---|---|---|
-| 0.001 | 18.5 MB | — | 830k |
-| **0.002** | **11.5 MB** | **2.9 MB** | **478k** |
-| 0.004 | 7.3 MB | 1.8 MB | 267k |
+| none | 476 MB | — | 17,848,142 |
+| 0.0005 | 32.1 MB | 9.1 MB | 1,380,482 |
+| 0.001 | 20.1 MB | 5.8 MB | 830,415 |
+| **0.002** | **11.5 MB** | **2.9 MB** | **478,015** |
+| 0.004 | 7.3 MB | 1.8 MB | 266,825 |
 
-0.002 keeps enough fidelity for Explore at high zoom while staying phone-friendly. Datasets
-ship **gzipped and are inflated in the browser** (`DecompressionStream`), so a static host
-needs no content-encoding config; gzip magic-byte detection means it also works if the host
-*does* send `Content-Encoding: gzip`.
+**Verified fidelity at 0.002** (raw vs. simplified, via OGR):
+
+| | raw | simplify 0.002 |
+|---|---|---|
+| Features | 11,377 | **11,377** — none lost |
+| Rings | 13,366 | 13,368 |
+| Vertices | 17,848,142 | **478,015** (−97.3%) |
+| Total area | 52.6074 deg² | 52.3763 deg² (**−0.44%**) |
+| Invalid geometries | 34 | **7** |
+
+**37× fewer vertices for 0.44% area distortion, with no fire dropped.** Web-Mercator resolution
+at ~41°N makes this invisible where it matters: z4 ≈ 7,400 m/px (200 m is 1/37 of a pixel),
+z8 ≈ 460 m/px (still sub-pixel), z12 ≈ 29 m/px (~7 px — visible softening). Finer datasets
+(0.001, 0.0005) were built and measured but **not needed in practice**, so 0.002 ships.
+
+**Two caveats:** plain `-simplify` is not topology-preserving (`-simplifyPreserveTopology` is
+the safer, slower option) — here it was benign, and invalid geometries actually *fell* from 34
+to 7, since simplification erased some self-intersecting stair-steps. Note the **source data
+ships with 34 invalid geometries of its own**. And one global tolerance is inherently a
+compromise; the PMTiles/tippecanoe step below generalizes *per zoom level* instead.
 
 ### Still to build
 
-1. **Severity (drives at-rest fills):** per-year CONUS thematic mosaics 1984–2024 from
+1. **Severity (drives at-rest colouring):** per-year CONUS thematic mosaics 1984–2024 from
    ScienceBase (confirmed: 41 child items, no gaps), clipped to the 11-state union,
    `gdal_sieve` → `gdal_polygonize` in native Albers → reproject → merge. The validation run
    extrapolates ~450 state-years to minutes of compute and a low-hundreds-of-MB archive.
-2. **PMTiles** via tippecanoe: a `perimeters` layer (all years, with `event_days` and `year`) +
-   a `severity` layer (complete years), maxzoom ~z12–13, on R2. This replaces the GeoJSON fetch
-   and removes the size ceiling entirely — worth doing when severity lands, since severity
-   polygons are far bulkier than perimeters.
-3. **Two geometry detail levels**, if needed: coarse for the animation, full for Explore. The
-   0.002 compromise defers this; PMTiles solves it properly via per-zoom generalization.
-4. **Base map:** Protomaps 11-state extract → R2 (replacing OpenFreeMap).
+2. **PMTiles** via tippecanoe: a `perimeters` layer (all years, with `year`) + a `severity`
+   layer (complete years), maxzoom ~z12–13, on R2. Removes the GeoJSON size ceiling and
+   generalizes per zoom.
+3. **Base map:** Protomaps 11-state extract → R2 (replacing OpenFreeMap), which also lifts the
+   z14 detail ceiling.
 
-## Data caveats (carried over, still true)
+## Data caveats (still true)
 
 - **Provisional tail (mosaic lag ~2 yr):** severity mosaics are complete only through ~2023;
-  the newest 1–2 years have perimeters (with dates, so they animate fine) but little/no
-  severity. **Mode 1 runs through the newest perimeter year; Mode 2 fills only through the
-  newest complete mosaic year**, with recent fires as outlines. Badge the provisional tail.
+  the newest 1–2 years have perimeters (so they animate fine) but little/no severity. Badge the
+  provisional tail once severity is wired up.
 - **"No pixels" ≠ "didn't burn"** for the newest mosaic year (mosaic extents are cropped to
   that year's mapped fires).
 - Perimeters always come from the perimeter shapefile, never inferred from mosaics.
 - **MTBS threshold:** ≥1,000 acres in the West, so this is "all significant fires," not
-  literally all fires. WFIGS could supplement later (see `recommendation.md`).
-- **2025 is started but unusably sparse** — the July 2026 perimeter release has 33 fires
-  across 8 states for 2025 (and 2 records dated 2026), vs. ~300/yr typical. WA has none. The
-  build therefore cuts at 2024-12-31; revisit when MTBS finalizes 2025.
+  literally all fires. WFIGS could supplement later.
+- **2025 is started but unusably sparse** — the July 2026 perimeter release has 33 fires across
+  8 states for 2025 (and 2 records dated 2026), vs. ~300/yr typical. WA has none. The build cuts
+  at 2024-12-31; revisit when MTBS finalizes 2025.
 
 ## Milestones
 
-1. ~~**Base map**~~ ✅ bland dark vector base, coastline, progressive detail tiers, toggles,
-   satellite. (OpenFreeMap; Protomaps extract deferred.)
-2. ~~**WA test slice**~~ ✅ 643 fires, 1984–2024, animating with real ignition dates.
+1. ~~**Base map**~~ ✅ bland dark vector base, coastline, progressive detail tiers.
+2. ~~**WA test slice**~~ ✅ 643 fires, 1984–2024.
 3. ~~**Full-scope perimeter build**~~ ✅ 11 states × 41 years, 11,377 fires, 2.8 MB gzipped.
-4. **Confirm animation performance on real hardware** (desktop, then a phone) — the open item,
-   now more pressing at 11,377 fires / 478k vertices.
-5. **Severity layer** — build the raster half of the pipeline so Explore colors by MTBS
-   severity instead of year, with the plain-language legend (shade loss / deadfall / canopy).
-   Move to PMTiles on R2 at the same time.
-6. **Explore polish** — mobile-responsive layout, then pick the new name.
+4. ~~**Animation performance**~~ ✅ 59–61 fps on real hardware.
+5. ~~**Engine simplification**~~ ✅ integer-year states; engine 483 → 171 lines (−65%), no
+   data-driven paint anywhere, and no view modes. Fixed the long-standing "fires flashing after
+   the end" bug.
+6. **Severity layer** — build the raster half of the pipeline so a parked animation can colour by
+   MTBS severity, with a plain-language legend (shade loss / deadfall / canopy loss). Move to
+   PMTiles at the same time.
+7. **Mobile** — the layout is desktop-first; panels are fixed-width and the popup needs a
+   touch-friendly close target.
+8. **Pick the new name.**
