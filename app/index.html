@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>40 years of fire — Washington</title>
+  <title>40 years of fire — Western US</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
   <link href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" rel="stylesheet">
@@ -62,7 +62,7 @@
 <div id="map"></div>
 
 <div id="title" class="panel">
-  <b>40 years of fire — Washington</b><br>
+  <b>40 years of fire — <span id="region">…</span></b><br>
   <span id="subtitle">loading…</span>
 </div>
 
@@ -206,10 +206,18 @@ const style = {
 };
 
 const q = new URLSearchParams(location.search);
+
+// ?data=west (default, 11 Western states) | ?data=wa (the WA test slice)
+const DATASETS = {
+  west: { file: 'data/west_fires.geojson.gz', label: 'Western US', center: [-116.0, 41.3], zoom: 4.15 },
+  wa:   { file: 'data/wa_fires.geojson.gz',   label: 'Washington', center: [-120.3, 47.4], zoom: 6.15 }
+};
+const DS = DATASETS[q.get('data')] || DATASETS.west;
+
 const map = new maplibregl.Map({
   container: 'map', style,
-  center: [parseFloat(q.get('lng') || -120.3), parseFloat(q.get('lat') || 47.4)],
-  zoom: parseFloat(q.get('z') || 6.15), minzoom: 3, maxzoom: 17,
+  center: [parseFloat(q.get('lng') || DS.center[0]), parseFloat(q.get('lat') || DS.center[1])],
+  zoom: parseFloat(q.get('z') || DS.zoom), minzoom: 3, maxzoom: 17,
   attributionControl: { compact: true }
 });
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
@@ -241,8 +249,22 @@ function repPoint(geom) {
 // ---------------------------------------------------------------------------
 // Load fires, wire everything up
 // ---------------------------------------------------------------------------
+// Datasets are shipped gzipped (~2.8 MB for the 11-state file vs. 11.5 MB raw) and inflated
+// in the browser, so no server-side content-encoding config is needed. If a host *does* send
+// Content-Encoding: gzip, the browser will have already decompressed it — detected via the
+// gzip magic bytes, so both cases work.
+async function loadFires(url) {
+  const buf = await (await fetch(url)).arrayBuffer();
+  const u8 = new Uint8Array(buf);
+  if (u8[0] === 0x1f && u8[1] === 0x8b) {
+    const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return new Response(stream).json();
+  }
+  return JSON.parse(new TextDecoder().decode(u8));
+}
+
 Promise.all([
-  fetch('data/wa_fires.geojson').then(r => r.json()),
+  loadFires(DS.file),
   new Promise(res => map.on('load', res))
 ]).then(([fc]) => {
   // derive the time window from the data and stamp event_days on each feature
@@ -260,8 +282,9 @@ Promise.all([
   totalDays = (Y1 - Y0) / DAY;
   durationMs = (maxYear - minYear + 1) * SEC_PER_YEAR * 1000;
   for (const f of fc.features) f.properties.event_days = (f.properties._t - Y0) / DAY;
+  document.getElementById('region').textContent = DS.label;
   document.getElementById('subtitle').textContent =
-    `${minYear}–${maxYear} · ${fc.features.length} fires · ${((durationMs / 1000) | 0)}s`;
+    `${minYear}–${maxYear} · ${fc.features.length.toLocaleString()} fires · ${((durationMs / 1000) | 0)}s`;
 
   // centroids for the glow layer
   const pts = {
@@ -294,8 +317,10 @@ Promise.all([
     id: 'rec-glow', type: 'circle', source: 'firepts',
     paint: {
       'circle-color': '#fff1a8', 'circle-blur': 0.85,
-      'circle-radius': ['interpolate', ['linear'], ['get', 'acres'],
-        100, 5, 2000, 14, 20000, 30, 60000, 46],
+      // scaled by acreage, and by zoom so continental view isn't a wash of blobs
+      'circle-radius': ['*',
+        ['interpolate', ['linear'], ['get', 'acres'], 100, 4, 2000, 11, 20000, 24, 60000, 38],
+        ['interpolate', ['linear'], ['zoom'], 4, 0.5, 6, 1, 10, 1.6]],
       'circle-opacity': ['get', 'glow']            // static expression; data changes, paint doesn't
     }
   });

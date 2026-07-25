@@ -19,14 +19,14 @@ vectorized PMTiles on R2, MapLibre GL JS, Cloudflare); this doc supersedes its *
 
 | Decision | Choice |
 |---|---|
-| Time window | **The full MTBS record, ~40 years.** Currently **1984–2024** (the July 2026 perimeter release hasn't mapped 2025 yet); extends forward automatically as MTBS publishes |
-| Geographic scope | **11 Western states** (WA, OR, CA, ID, NV, UT, AZ, MT, WY, CO, NM). **WA is the test slice** |
+| Time window | **The full MTBS record, ~40 years.** Currently **1984–2024**; extends forward as MTBS finalizes each season. 2025 exists but is far too sparse to include (see caveats) |
+| Geographic scope | **11 Western states** (WA, OR, CA, ID, NV, UT, AZ, MT, WY, CO, NM) — **built**, 11,377 fires. WA (643) kept as a lighter dataset |
 | Animation fade model | **Accumulate & fade** — a fire stays on the map after its season, dimming with age toward a still-visible ember floor; the final frame shows all 40 years at once |
 | At-rest view | **Severity, manual toggle** — the animation ends on its final frame and holds; a control switches to a static severity view |
 | Fire mark | **Filled perimeter + glow** — the real perimeter polygon, plus a centroid bloom at ignition so small fires register at multi-state zoom |
 | Map stack | **MapLibre GL JS.** No account, token, or metered billing. Satellite from free public raster (Esri World Imagery / USGS Imagery) — Mapbox not needed |
 | Base map | Bland at overview zoom, but **a true scalable map**: progressively more detail as you zoom, plus layer toggles |
-| Efficiency | **A requirement, not polish.** Must run on phones while showing all 11 states (~15–25k perimeters) |
+| Efficiency | **A requirement, not polish.** Must run on phones while showing all 11 states (**11,377** perimeters, 1984–2024) |
 
 The base map is **decoupled** from the animation/data layers, so swapping it later (even to
 Mapbox/MapTiler) touches only the base style — nothing in the animation engine.
@@ -142,7 +142,7 @@ The current design:
    (an earlier version could leave orphaned loops running, stacking extra sweeps).
 
 This scales with the number of **years** (~40 layers), not the number of fires — which is what
-makes the 11-state, ~15–25k-perimeter target viable on a phone.
+makes the 11-state, 11,377-perimeter target viable on a phone.
 
 ### Accepted tradeoffs
 - **Completed seasons fade per-year, not per-fire.** All fires in a finished season share one
@@ -160,25 +160,52 @@ a look on the actual machine, and eventually a phone. If fires still trail the c
 next suspect is the **base-map layer count** (forest fills, buildings, streams, label layers)
 rather than the fire layers.
 
-## Build-pipeline changes for full scope
+## Build pipeline
 
-The `pipeline/` slice (WA × 2023/2024) already proved the vectorize path.
+### Perimeters — ✅ built (drives the animation)
 
-1. **Perimeters (drive the animation):** the MTBS perimeter shapefile is one national file —
-   filter to the 11 states × 1984–present; no per-state download. `event_days` from `ig_date`.
-   This layer is the animation's backbone and Mode 2's extent layer.
-   *WA slice: `ogr2ogr` with a SQLite-dialect query + `-simplify 0.0005` → 643 fires, 2.2 MB.*
-2. **Severity (drives at-rest fills):** per-year CONUS thematic mosaics 1984–2024 from
-   ScienceBase, clipped to the 11-state union, `gdal_sieve` → `gdal_polygonize` in native
-   Albers → reproject → merge. The validation run extrapolates to minutes of compute and a
-   low-hundreds-of-MB archive.
-3. **Combine** via tippecanoe into PMTiles: a `perimeters` layer (all years, with `event_days`
-   and `year`) + a `severity` layer (complete years). Maxzoom ~z12–13.
-4. **Two geometry detail levels are worth considering:** the animation reads at state/regional
-   zoom and doesn't need z13 fidelity, while Explore does. A simplified copy for the animation
-   would cut vertex count substantially at full scope.
-5. **Base map:** build the Protomaps 11-state extract → R2 (replacing OpenFreeMap).
-6. Upload versioned PMTiles + metadata JSON to R2; MapLibre's `pmtiles` protocol reads them.
+The MTBS perimeter shapefile is one national file, so no per-state download. One `ogr2ogr`
+command filters to the 11 states × 1984–2024 and reprojects:
+
+```
+ogr2ogr -f GeoJSON west_fires.geojson -t_srs EPSG:4326 \
+  -simplify 0.002 -lco COORDINATE_PRECISION=4 \
+  -sql "SELECT incid_name AS name, incid_type AS type, ig_date, burnbndac AS acres,
+        asmnt_type AS asmnt FROM mtbs_perims_DD
+        WHERE SUBSTR(event_id,1,2) IN ('WA','OR','CA','ID','NV','UT','AZ','MT','WY','CO','NM')
+          AND ig_date >= '1984-01-01' AND ig_date <= '2024-12-31'" \
+  pipeline/data/perimeters/mtbs_perims_DD.shp
+```
+
+State attribution uses the `event_id` prefix (where the fire started), which is why the data
+stops cleanly at state lines. `event_days`/`year` are derived client-side from `ig_date`.
+
+**Simplification chosen: `0.002°` (~200 m).** Measured tradeoff across the 11 states:
+
+| `-simplify` | raw | gzipped | vertices |
+|---|---|---|---|
+| 0.001 | 18.5 MB | — | 830k |
+| **0.002** | **11.5 MB** | **2.9 MB** | **478k** |
+| 0.004 | 7.3 MB | 1.8 MB | 267k |
+
+0.002 keeps enough fidelity for Explore at high zoom while staying phone-friendly. Datasets
+ship **gzipped and are inflated in the browser** (`DecompressionStream`), so a static host
+needs no content-encoding config; gzip magic-byte detection means it also works if the host
+*does* send `Content-Encoding: gzip`.
+
+### Still to build
+
+1. **Severity (drives at-rest fills):** per-year CONUS thematic mosaics 1984–2024 from
+   ScienceBase (confirmed: 41 child items, no gaps), clipped to the 11-state union,
+   `gdal_sieve` → `gdal_polygonize` in native Albers → reproject → merge. The validation run
+   extrapolates ~450 state-years to minutes of compute and a low-hundreds-of-MB archive.
+2. **PMTiles** via tippecanoe: a `perimeters` layer (all years, with `event_days` and `year`) +
+   a `severity` layer (complete years), maxzoom ~z12–13, on R2. This replaces the GeoJSON fetch
+   and removes the size ceiling entirely — worth doing when severity lands, since severity
+   polygons are far bulkier than perimeters.
+3. **Two geometry detail levels**, if needed: coarse for the animation, full for Explore. The
+   0.002 compromise defers this; PMTiles solves it properly via per-zoom generalization.
+4. **Base map:** Protomaps 11-state extract → R2 (replacing OpenFreeMap).
 
 ## Data caveats (carried over, still true)
 
@@ -191,16 +218,19 @@ The `pipeline/` slice (WA × 2023/2024) already proved the vectorize path.
 - Perimeters always come from the perimeter shapefile, never inferred from mosaics.
 - **MTBS threshold:** ≥1,000 acres in the West, so this is "all significant fires," not
   literally all fires. WFIGS could supplement later (see `recommendation.md`).
-- **2025 isn't in the data yet** — the July 2026 perimeter release stops at 2024.
+- **2025 is started but unusably sparse** — the July 2026 perimeter release has 33 fires
+  across 8 states for 2025 (and 2 records dated 2026), vs. ~300/yr typical. WA has none. The
+  build therefore cuts at 2024-12-31; revisit when MTBS finalizes 2025.
 
 ## Milestones
 
 1. ~~**Base map**~~ ✅ bland dark vector base, coastline, progressive detail tiers, toggles,
    satellite. (OpenFreeMap; Protomaps extract deferred.)
 2. ~~**WA test slice**~~ ✅ 643 fires, 1984–2024, animating with real ignition dates.
-3. **Confirm animation performance on real hardware** (desktop, then a phone) — the open item.
-4. **Severity layer** — build the raster half of the pipeline so Explore colors by MTBS
+3. ~~**Full-scope perimeter build**~~ ✅ 11 states × 41 years, 11,377 fires, 2.8 MB gzipped.
+4. **Confirm animation performance on real hardware** (desktop, then a phone) — the open item,
+   now more pressing at 11,377 fires / 478k vertices.
+5. **Severity layer** — build the raster half of the pipeline so Explore colors by MTBS
    severity instead of year, with the plain-language legend (shade loss / deadfall / canopy).
-5. **Full-scope data build** — 11 states × 40 years → PMTiles on R2, including the
-   simplified-geometry decision for the animation.
+   Move to PMTiles on R2 at the same time.
 6. **Explore polish** — mobile-responsive layout, then pick the new name.
