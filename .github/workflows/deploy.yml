@@ -1,14 +1,19 @@
 # Deploy the site to Cloudflare Workers static assets on every push to main.
 #
-# No build step and no `npm ci`: wrangler-action installs Wrangler itself (version pinned below)
-# and reads wrangler.jsonc, which is assets-only.
+# Runs wrangler directly rather than via cloudflare/wrangler-action. The action installs its own
+# wrangler (still 3.90.0 by default, which cannot deploy an assets-only Worker — it fails with
+# "Missing entry-point" because wrangler.jsonc has no `main`), and pinning its `wranglerVersion`
+# then failed on the runner with "npx canceled due to missing packages and no YES option".
+# `npm ci` + `npx wrangler` uses the exact version pinned in package-lock.json, which is the same
+# one verified locally, and passes the token the way wrangler documents.
 #
 # Requires one repository secret:
 #   CLOUDFLARE_API_TOKEN  — Cloudflare dashboard → My Profile → API Tokens →
 #                           Create Token → "Edit Cloudflare Workers" template.
-# Add CLOUDFLARE_ACCOUNT_ID as a second secret (and pass it below as `accountId`) only if the
-# token can see more than one Cloudflare account, in which case the deploy fails asking you to
-# disambiguate.
+#                           It must be the secret's VALUE, with the secret NAMED
+#                           CLOUDFLARE_API_TOKEN.
+# Add CLOUDFLARE_ACCOUNT_ID as a second secret (and uncomment it below) only if the token can see
+# more than one Cloudflare account, in which case the deploy fails asking you to disambiguate.
 #
 # To deploy only when the site actually changes, add a paths filter under `push:`
 # (e.g. app/**, wrangler.jsonc, package.json). Left off deliberately: every push to main
@@ -33,11 +38,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: cloudflare/wrangler-action@v3
+      - uses: actions/setup-node@v4
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          # Pin v4: the action still installs wrangler 3.90.0 by default, and v3 cannot deploy
-          # an assets-only Worker (it fails with "Missing entry-point" because there is no
-          # `main`). Keep this in step with the devDependency in package.json.
-          wranglerVersion: "4.114.0"
-
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
