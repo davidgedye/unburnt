@@ -1,7 +1,7 @@
 # Deploy the site to Cloudflare Workers static assets on every push to main.
 #
-# No build step and no `npm ci`: wrangler-action installs Wrangler itself (defaulting to v4,
-# matching the devDependency in package.json) and reads wrangler.jsonc, which is assets-only.
+# No build step and no `npm ci`: wrangler-action installs Wrangler itself (version pinned below)
+# and reads wrangler.jsonc, which is assets-only.
 #
 # Requires one repository secret:
 #   CLOUDFLARE_API_TOKEN  — Cloudflare dashboard → My Profile → API Tokens →
@@ -36,3 +36,8 @@ jobs:
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # Pin v4: the action still installs wrangler 3.90.0 by default, and v3 cannot deploy
+          # an assets-only Worker (it fails with "Missing entry-point" because there is no
+          # `main`). Keep this in step with the devDependency in package.json.
+          wranglerVersion: "4.114.0"
+
