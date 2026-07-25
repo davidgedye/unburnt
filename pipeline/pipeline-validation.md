@@ -3,7 +3,18 @@
 End-to-end validation of the vectorize-severity pipeline on one state × one year, per
 `recommendation.md` next-steps §3. **Verdict: pipeline works, is fast, and the rendered
 result matches the product vision** (see `screenshots/wa_retreat_z11.png`). One major data
-finding changes the v1 plan — see "Findings" below.
+finding changes the plan — see "Findings" below.
+
+> **Historical record — read with two caveats** (this is a dated log of one run, kept as-is):
+> 1. The project has since become a **40-year fire visualization** (`animation-plan.md`), so
+>    the target is now the full MTBS record, 1984–present, not the ~30 years assumed here.
+> 2. This run validated the **severity raster → vector** half of the pipeline, which the
+>    visualization uses only for its at-rest view. The animation is driven by the **perimeter
+>    shapefile** (it carries per-fire ignition dates); that path is now built for WA
+>    1984–2024 — 643 fires via `ogr2ogr` — and lives in `app/`.
+>
+> The viewer described below (`pipeline/viewer.html`, USGS Topo base, severity fills) is the
+> old severity prototype, superseded by `app/index.html`. Findings 1–6 all still hold.
 
 ## What ran (all local, WSL2 laptop, no sudo)
 
@@ -65,9 +76,9 @@ To view: with both servers running, open `http://localhost:8081/viewer.html`
    2024 mosaic's extent doesn't even reach Swawilla's latitude. Never assume full-CONUS
    coverage; also means "no pixels here" ≠ "didn't burn" for the newest year.
 3. **Scaling looks trivial.** WA×2024 (a light year) vectorized in <10 s and 983 KB. Even
-   ~300 state-years for 11 states × 30 yr extrapolates to minutes of compute; the PMTiles
-   for the full scope will likely land in the low hundreds of MB. The 7.7 GB WSL2 RAM cap
-   never mattered.
+   ~450 state-years for 11 states × 41 yr (1984–2024) extrapolates to minutes of compute; the
+   PMTiles for the full scope will likely land in the low hundreds of MB. The 7.7 GB WSL2 RAM
+   cap never mattered.
 4. **Mosaic values confirmed:** byte raster, NoData=0, 1=unburned/low, 2=low, 3=moderate,
    4=high, 5=increased greenness, 6=masked, palette embedded. WA 2024 polygon counts after
    sieve: 657/150/996/212/1/6 for classes 1–6.

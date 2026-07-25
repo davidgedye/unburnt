@@ -1,7 +1,15 @@
 # Wildfire & Smoke Data Sources — Survey
 
-Research compiled for the "unburnt" project: a hiking-planning tool that overlays historical burn
-severity, active fire perimeters, and live smoke/air-quality data on a zoomable map of the Western US.
+Research compiled for the "unburnt" project: a **40-year visualization of Western US wildfire**
+(1984–present) — an animation of the full MTBS record over a zoomable map, with burn severity
+in an at-rest view. See `animation-plan.md` for the current plan.
+
+**What this means for sources below:** MTBS is the backbone — its *perimeter* shapefile drives
+the animation (it carries per-fire ignition dates, which is what makes within-season flare
+timing possible), and its *severity* rasters drive the at-rest view. The active-fire, smoke, and
+AQI sources were surveyed for the project's earlier hike-planning framing; they're now
+out-of-scope extras rather than planned layers, kept here because the research is done and a
+"current season" layer may still be worth adding.
 
 ## Historical burn severity & perimeters
 
@@ -118,9 +126,10 @@ severity, active fire perimeters, and live smoke/air-quality data on a zoomable 
   analysis, CA only.
 - **CAP Radio California Wildfire History Map** — historical CA perimeters back to 1878.
 
-**Gap in the market:** all existing hiker-facing tools color-code by *recency*, none surface
-MTBS's *severity* data, and none combine historical burns + active fires + live smoke/AQI in
-one hiking-oriented view.
+**Gap in the market:** the existing tools are all *reference maps* — static layers you inspect,
+typically color-coded by recency, ~20 years deep, with no severity. None of them play the fire
+record as a **time animation** over the full 40-year MTBS archive, which is this project's
+angle; surfacing MTBS *severity* at rest remains a secondary differentiator.
 
 ## Licensing
 

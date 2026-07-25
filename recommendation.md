@@ -1,5 +1,13 @@
 # Recommendation — Data Sources, Architecture, and Open Questions
 
+> **Scope note (2026-07-25):** this document was written when the project was a hike-planning
+> tool. The project is now a **40-year Western fire visualization** — see `animation-plan.md`,
+> which is the current plan. What remains accurate here: the data-source stack, the
+> Cloudflare/R2/PMTiles architecture, and why MapLibre GL JS. What is superseded: the
+> hike-planning *framing*, the "v1 = severity for trip planning" scope, and the basemap choice
+> (the visualization needs a bland *vector* base, not USGS Topo raster). Time window is now the
+> **full ~40-year MTBS record (1984–present)**, not the last ~30 years.
+
 ## Recommended data source stack
 
 | Layer | Source | Why |
@@ -19,7 +27,7 @@ proxy layer** for anything that changes minute-to-minute.
 
 ### Build-time (run periodically — e.g. quarterly, matching MTBS's release cadence)
 1. Pull MTBS **thematic (classified)** severity rasters + perimeter shapefiles for the last
-   ~30 years, clipped to the 11 Western states. (The thematic product is already binned into
+   ~40 years (1984–present), clipped to the 11 Western states. (The thematic product is already binned into
    discrete classes — there is no extra fidelity in tiling it as raster; continuous dNBR
    isn't comparable across fires without MTBS's per-fire thresholds anyway.)
 2. **Vectorize** the classified severity raster: `gdal_sieve` to drop speckle patches below a
@@ -100,9 +108,9 @@ with Workers, the proxy approach is the better tradeoff here.
 - **Geographic scope:** all 11 Western states (WA, OR, CA, ID, NV, UT, AZ, MT, WY, CO, NM).
   Alaska deferred past v1 — MTBS distributes it separately in a different projection (Alaska
   Albers vs. CONUS Albers), roughly doubling the acquisition/reprojection pipeline.
-- **Time window:** last ~30 years. Deadfall in high-severity burns peaks 10–20 years
-  post-fire and shade loss persists for decades, so 10 years would cut the data exactly
-  where severity is most useful; with vector severity the marginal cost is small.
+- **Time window:** the **full ~40-year MTBS record (1984–present)**. Originally set at ~30
+  years for hike-planning relevance (deadfall peaks 10–20 years post-fire); the visualization
+  framing wants the whole record, and with vector data the marginal cost is small.
 - **Severity representation:** vectorized from the MTBS *thematic* (classified) raster —
   the source is already discrete classes, so vector loses nothing, and it buys year
   filtering, click-to-query, and a single-format PMTiles pipeline. Maxzoom ~z12–13 to match
@@ -118,13 +126,13 @@ with Workers, the proxy approach is the better tradeoff here.
   questions), R2 for tile storage, Workers for the v1.1+ live-data proxy. Fire metadata is a
   static build-time JSON; **D1 deferred** until fire count/scale demands a real query layer.
 - **MVP scope:** ship the historical burn severity layer alone first (MTBS severity +
-  perimeters, last ~30 years, 11 Western states). Validate that the core idea is useful
+  perimeters, ~40 years, 11 Western states). Validate that the core idea is useful
   before adding active fire perimeters, smoke, and AQI in a later phase.
 
 ## Revised v1 scope (given the decisions above)
 
 v1 is deliberately narrow: a zoomable MapLibre GL map of the 11 Western states, with MTBS
-burn severity polygons (and perimeters) for the last ~30 years, color/shade-coded, servable
+burn severity polygons (and perimeters) for the full ~40-year record, color/shade-coded, servable
 from Cloudflare Pages/Workers + R2. No trails, no live fire/smoke/AQI, no offline, desktop-first.
 Active fire perimeters (WFIGS Current), smoke (NOAA HMS), and AQI (AirNow) become a v1.1/v2
 addition once the core severity view is validated. Mobile-responsive polish is also deferred
@@ -146,7 +154,7 @@ plan. Roughly in order:
    so the severity layer's newest year must be treated as partial — perimeters carry
    recent-fire extent (which the two-layer design already does).
 4. **MTBS data acquisition** — thematic severity rasters (annual mosaics are the likely easy
-   path) + perimeter shapefiles, ~30 years, clipped to the 11 Western states. Confirm exact
+   path) + perimeter shapefiles, ~40 years, clipped to the 11 Western states. Confirm exact
    download mechanism and check format details haven't changed since this research
    (mtbs.gov, ~mid-2026).
 5. **Vectorization pipeline** — script the sieve → polygonize (native Albers CRS) →
@@ -171,7 +179,7 @@ plan. Roughly in order:
   perimeters mostly adds noise; likely render low/moderate/high fills and let the perimeter
   outline carry extent. Also pick the `gdal_sieve` speckle threshold during the validation
   slice.
-- **Reburn styling** — areas burned more than once in 30 years will have overlapping
+- **Reburn styling** — areas burned more than once in 40 years will have overlapping
   severity polygons from different years. Newest-on-top with opaque fills is the likely
   answer (translucent stacking reads as mud); needs a MapLibre sort key on year.
 - **WFIGS historical supplement** — out of v1 (MTBS-only scope), revisit in v1.1: it catches

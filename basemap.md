@@ -1,9 +1,18 @@
 # Basemap Research — Options & Recommendation
 
-Research for the open question flagged in `recommendation.md`: what base layer goes under the
-burn-severity overlay. Requirements: hiking-grade terrain context (hillshade, contours, place
-names, ideally trails), works in MapLibre GL JS, free/unmetered (project principle — no keys,
-no bills that scale with usage), Western US coverage only. Verified July 2026.
+> **Outcome (2026-07-25): Option A was NOT adopted.** This doc was written for the project's
+> hike-planning framing, where the base needed hiking-grade terrain context. The project is now
+> a **40-year fire visualization** (`animation-plan.md`), which inverts the requirement: the
+> base must be **bland and dark** so fire flares dominate, **vector** so it can be dimmed and
+> restyled, and **progressively detailed** so it still works as a real map when exploring.
+> A raster topo base can't be dimmed or re-ordered, so the shipped choice is the *vector* path
+> — **Option C (OpenFreeMap) now, Option B (Protomaps extract on R2) as the upgrade** — with a
+> free satellite raster as an optional toggle (Esri World Imagery / USGS Imagery). The research
+> below stands; only the recommendation at the bottom is superseded.
+
+Original requirements (hike-planning era): hiking-grade terrain context (hillshade, contours,
+place names, ideally trails), works in MapLibre GL JS, free/unmetered (project principle — no
+keys, no bills that scale with usage), Western US coverage only. Verified July 2026.
 
 ## Option A — USGS "The National Map" tile services (raster)
 
@@ -68,19 +77,34 @@ Three free, unmetered pieces that MapLibre composes natively:
 
 ## Recommendation
 
-**v1: Option A (USGS Topo raster) as the shipping base, with Option B's hillshade wired in
-from day one where useful.** Rationale: v1's job is validating that severity-over-terrain is
-useful for hike planning; USGS Topo delivers full hiking context (contours, relief, names) for
-one line of style JSON and zero pipeline, honoring the "personal tool, don't over-engineer"
-principle. CalTopo renders its fire-history layer over exactly this kind of topo raster, so
-overlay readability is proven, not hypothetical — use mostly-opaque severity fills.
+### Superseded (hike-planning era)
 
-**v1.1+ upgrade path: Option B** (Protomaps extract on R2 + terrarium hillshade +
-`maplibre-contour`), *if* v1 surfaces the predictable raster-base pains: labels buried under
-fills, no way to dim the base, USGS service slowness. Swapping the base is additive — the
-severity PMTiles layer and all MapLibre overlay code are unchanged — so nothing in v1 needs
-to anticipate it beyond keeping overlay style code separate from base style JSON. OpenFreeMap
-is the low-effort intermediate if self-hosting the extract isn't yet justified.
+> ~~**v1: Option A (USGS Topo raster) as the shipping base**, with Option B's hillshade wired in
+> where useful — full hiking context for one line of style JSON and zero pipeline, with Option B
+> as the v1.1+ upgrade if the raster base chafed.~~
+>
+> Why it was dropped: the visualization needs the base *out of the way* during the animation.
+> A raster topo base can't be dimmed, can't put labels above the fire fills, and its baked
+> contours/relief compete with the flares — exactly the pains this doc predicted, now
+> load-bearing rather than hypothetical.
 
-Base-layer toggle (Topo / Imagery via `USGSImageryTopo`) is cheap with two raster sources and
-genuinely useful for hikers — worth including in v1.
+### Current (40-year visualization)
+
+**Shipping now: Option C — OpenFreeMap hosted vector tiles.** Free, no key, no registration, no
+request limits; OpenMapTiles schema, so the named source-layers (boundary, water, waterway,
+place, transportation, landcover, park, building) can each be styled and zoom-gated
+independently. That's what makes the base both bland at continental zoom and a genuine scalable
+map as you zoom in. Styled dark and low-contrast, with an explicit **coastline stroke** so the
+land/water edge reads as clearly as state boundaries.
+
+**Upgrade path: Option B piece 1 — a Protomaps 11-state extract on R2**, same PMTiles-on-R2
+serving as the fire data, when self-hosting is worth it (no third-party runtime dependency,
+full control). Layer definitions barely change; it's a source swap.
+
+**Satellite toggle:** a raster layer, off by default — **Esri World Imagery** (free with
+attribution) or **USGS Imagery** (public domain). This is what makes Mapbox unnecessary: the
+one capability that seemed to require it is available as free public raster.
+
+**Terrain (Option B pieces 2–3 — terrarium hillshade + `maplibre-contour`)** is deferred, not
+rejected. It's additive whenever it's wanted, and would matter more if severity-over-terrain
+ever becomes a focus again.

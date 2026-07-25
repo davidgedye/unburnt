@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>40 years of fire — Washington</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" rel="stylesheet">
+  <style>
+    :root { --panel: rgba(16,20,27,.86); --ink: #c3ccd6; --dim: #7a8794; --hot: #ff7a1a; }
+    html, body, #map { margin: 0; height: 100%; background: #0a0d12; }
+    #map { position: absolute; inset: 0; }
+    .panel {
+      position: absolute; z-index: 2; background: var(--panel);
+      color: var(--ink); border: 1px solid rgba(255,255,255,.08);
+      border-radius: 10px; font: 13px/1.5 system-ui, sans-serif;
+      backdrop-filter: blur(8px); box-shadow: 0 4px 20px rgba(0,0,0,.5);
+    }
+    /* Layers panel (top-right) */
+    #layers { top: 96px; right: 12px; padding: 10px 12px; }
+    #layers h4 { margin: 0 0 6px; font-size: 11px; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--dim); font-weight: 600; }
+    #layers label { display: block; cursor: pointer; padding: 2px 0; }
+    #layers input { vertical-align: -1px; margin-right: 6px; accent-color: var(--hot); }
+    /* Title (top-left) */
+    #title { top: 12px; left: 12px; padding: 10px 14px; max-width: 300px; }
+    #title b { color: #fff; font-size: 15px; }
+    #title span { color: var(--dim); font-size: 12px; }
+    /* Timeline (bottom) */
+    #timeline { left: 12px; right: 12px; bottom: 12px; padding: 12px 16px;
+      display: flex; align-items: center; gap: 14px; }
+    #timeline button {
+      background: rgba(255,255,255,.06); color: var(--ink); cursor: pointer;
+      border: 1px solid rgba(255,255,255,.14); border-radius: 7px;
+      padding: 7px 12px; font: 600 13px system-ui; white-space: nowrap;
+    }
+    #timeline button:hover { background: rgba(255,255,255,.12); }
+    #timeline button.primary { background: var(--hot); border-color: var(--hot); color: #150a02; }
+    #clock { font: 700 15px/1 ui-monospace, monospace; color: #fff;
+      min-width: 128px; letter-spacing: .02em; }
+    #clock small { display: block; font: 500 10px system-ui; color: var(--dim);
+      letter-spacing: .1em; text-transform: uppercase; margin-bottom: 2px; }
+    #scrub { flex: 1; accent-color: var(--hot); height: 4px; cursor: pointer; }
+    #modes { display: flex; gap: 0; border: 1px solid rgba(255,255,255,.14);
+      border-radius: 7px; overflow: hidden; }
+    #modes button { border: none; border-radius: 0; }
+    #modes button.on { background: rgba(255,122,26,.25); color: #ffd9b0; }
+    /* Legend (bottom-left, above timeline) */
+    #legend { left: 12px; bottom: 78px; padding: 9px 12px; font-size: 12px; }
+    #legend .row { display: flex; align-items: center; gap: 7px; margin: 3px 0; }
+    #legend .sw { width: 22px; height: 10px; border-radius: 2px; }
+    #legend h4 { margin: 0 0 5px; font-size: 11px; letter-spacing: .06em;
+      text-transform: uppercase; color: var(--dim); font-weight: 600; }
+    .maplibregl-popup-content { background: #12161d; color: var(--ink);
+      border-radius: 8px; border: 1px solid rgba(255,255,255,.12); }
+    .maplibregl-popup-content b { color: #fff; }
+    .maplibregl-popup-tip { border-top-color: #12161d !important;
+      border-bottom-color: #12161d !important; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="title" class="panel">
+  <b>40 years of fire — Washington</b><br>
+  <span id="subtitle">loading…</span>
+</div>
+
+<div id="layers" class="panel">
+  <h4>Map detail</h4>
+  <label><input type="checkbox" id="lyr-cities" checked> Cities</label>
+  <label><input type="checkbox" id="lyr-rivers" checked> Rivers</label>
+  <label><input type="checkbox" id="lyr-roads"> Roads</label>
+  <label><input type="checkbox" id="lyr-sat"> Satellite</label>
+</div>
+
+<div id="legend" class="panel">
+  <h4 id="legend-title">Fire recency</h4>
+  <div id="legend-body"></div>
+</div>
+
+<div id="timeline" class="panel">
+  <div id="modes">
+    <button id="mode-anim" class="on">Animation</button>
+    <button id="mode-explore">Explore</button>
+  </div>
+  <button id="play" class="primary">Replay</button>
+  <div id="clock"><small>Season</small><span id="clock-date">—</span></div>
+  <input type="range" id="scrub" min="0" max="1000" value="0">
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+const OFM = 'https://tiles.openfreemap.org';        // free vector tiles, no key
+const SAT = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const SEC_PER_YEAR = 0.75;                           // animation pace (years per screen-second)
+const DAY = 86400000;
+const FLARE_DAYS = 60;                               // glow bloom window after ignition
+
+// recency ramp: age-in-days -> color (hot flare fading to a still-visible ember floor)
+const RAMP = [
+  0,      '#fff2b0',
+  30,     '#ffcf40',
+  120,    '#ff9526',
+  365,    '#ff5f1a',
+  1095,   '#e83c17',
+  2920,   '#b23016',
+  100000, '#8f2a15'
+];
+
+// ---------------------------------------------------------------------------
+// Bland dark base style (OpenFreeMap / OpenMapTiles schema)
+// ---------------------------------------------------------------------------
+const style = {
+  version: 8,
+  glyphs: OFM + '/fonts/{fontstack}/{range}.pbf',
+  sources: {
+    omt: { type: 'vector', url: OFM + '/planet' },
+    sat: { type: 'raster', tiles: [SAT], tileSize: 256, maxzoom: 19,
+           attribution: 'Esri World Imagery' }
+  },
+  layers: [
+    { id: 'bg', type: 'background', paint: { 'background-color': '#0a0d12' } },
+    { id: 'water', type: 'fill', source: 'omt', 'source-layer': 'water',
+      paint: { 'fill-color': '#0d1622' } },
+    // satellite sits above the dark fills so it replaces them when enabled
+    { id: 'satellite', type: 'raster', source: 'sat',
+      layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.9 } },
+    // coastline / shoreline stroke — as legible as the state boundaries
+    { id: 'coast', type: 'line', source: 'omt', 'source-layer': 'water',
+      paint: { 'line-color': '#4d6076',
+               'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.6, 7, 1.3, 12, 2.2] } },
+    // landcover / parks — subtle, fade in with zoom
+    { id: 'land-wood', type: 'fill', source: 'omt', 'source-layer': 'landcover',
+      minzoom: 7, filter: ['match', ['get', 'class'], ['wood', 'forest'], true, false],
+      paint: { 'fill-color': '#0f1a15',
+               'fill-opacity': ['interpolate', ['linear'], ['zoom'], 7, 0, 11, 0.55] } },
+    { id: 'land-park', type: 'fill', source: 'omt', 'source-layer': 'park',
+      minzoom: 8, paint: { 'fill-color': '#111f19',
+               'fill-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0, 12, 0.5] } },
+
+    // waterways (Rivers toggle): major rivers, then smaller streams deeper in
+    { id: 'waterway-river', type: 'line', source: 'omt', 'source-layer': 'waterway',
+      minzoom: 6, filter: ['==', 'class', 'river'],
+      paint: { 'line-color': '#243c50',
+               'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.5, 12, 1.8] } },
+    { id: 'waterway-minor', type: 'line', source: 'omt', 'source-layer': 'waterway',
+      minzoom: 11, filter: ['match', ['get', 'class'], ['stream', 'canal', 'drain', 'ditch'], true, false],
+      paint: { 'line-color': '#1d3040',
+               'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.4, 15, 1.2] } },
+
+    // roads (Roads toggle): motorways first, secondary + minor appear on zoom
+    { id: 'road-major', type: 'line', source: 'omt', 'source-layer': 'transportation',
+      minzoom: 7, layout: { visibility: 'none' },
+      filter: ['match', ['get', 'class'], ['motorway', 'trunk', 'primary'], true, false],
+      paint: { 'line-color': '#3a434f',
+               'line-width': ['interpolate', ['linear'], ['zoom'], 7, 0.5, 14, 2.4] } },
+    { id: 'road-secondary', type: 'line', source: 'omt', 'source-layer': 'transportation',
+      minzoom: 10, layout: { visibility: 'none' },
+      filter: ['match', ['get', 'class'], ['secondary', 'tertiary'], true, false],
+      paint: { 'line-color': '#2d353f',
+               'line-width': ['interpolate', ['linear'], ['zoom'], 10, 0.4, 15, 1.7] } },
+    { id: 'road-minor', type: 'line', source: 'omt', 'source-layer': 'transportation',
+      minzoom: 12, layout: { visibility: 'none' },
+      filter: ['match', ['get', 'class'], ['minor', 'service', 'track'], true, false],
+      paint: { 'line-color': '#262d36',
+               'line-width': ['interpolate', ['linear'], ['zoom'], 12, 0.3, 16, 1.3] } },
+
+    // buildings — deep zoom, very subtle
+    { id: 'building', type: 'fill', source: 'omt', 'source-layer': 'building',
+      minzoom: 13, paint: { 'fill-color': '#1b212a',
+               'fill-opacity': ['interpolate', ['linear'], ['zoom'], 13, 0, 15, 0.6] } },
+
+    // boundaries
+    { id: 'boundary-state', type: 'line', source: 'omt', 'source-layer': 'boundary',
+      filter: ['all', ['==', 'admin_level', 4], ['!=', 'maritime', 1]],
+      paint: { 'line-color': '#2e3946', 'line-width': 0.8, 'line-dasharray': [3, 2] } },
+    { id: 'boundary-country', type: 'line', source: 'omt', 'source-layer': 'boundary',
+      filter: ['all', ['<=', 'admin_level', 2], ['!=', 'maritime', 1]],
+      paint: { 'line-color': '#404e5e', 'line-width': 1.1 } },
+
+    // places (Cities toggle): dots + tiered labels — city/town, then village/hamlet on zoom
+    { id: 'place-dot', type: 'circle', source: 'omt', 'source-layer': 'place',
+      minzoom: 5, filter: ['match', ['get', 'class'], ['city', 'town', 'village', 'hamlet'], true, false],
+      paint: { 'circle-radius': ['match', ['get', 'class'], 'city', 3, 'town', 2.3, 1.5],
+               'circle-color': '#6b7e8c', 'circle-stroke-width': 0 } },
+    { id: 'place-major', type: 'symbol', source: 'omt', 'source-layer': 'place',
+      minzoom: 5, filter: ['match', ['get', 'class'], ['city', 'town'], true, false],
+      layout: { 'text-field': ['coalesce', ['get', 'name:en'], ['get', 'name']],
+                'text-font': ['Noto Sans Regular'],
+                'text-size': ['interpolate', ['linear'], ['zoom'], 5, 10, 11, 15],
+                'text-offset': [0, 0.8], 'text-anchor': 'top', 'text-max-width': 8,
+                'symbol-sort-key': ['coalesce', ['get', 'rank'], 100] },
+      paint: { 'text-color': '#9aa8b6', 'text-halo-color': '#0a0d12', 'text-halo-width': 1.3 } },
+    { id: 'place-minor', type: 'symbol', source: 'omt', 'source-layer': 'place',
+      minzoom: 9, filter: ['match', ['get', 'class'], ['village', 'hamlet', 'suburb', 'neighbourhood'], true, false],
+      layout: { 'text-field': ['coalesce', ['get', 'name:en'], ['get', 'name']],
+                'text-font': ['Noto Sans Regular'],
+                'text-size': ['interpolate', ['linear'], ['zoom'], 9, 9, 14, 13],
+                'text-offset': [0, 0.7], 'text-anchor': 'top', 'text-max-width': 7,
+                'symbol-sort-key': ['coalesce', ['get', 'rank'], 100] },
+      paint: { 'text-color': '#7f8d9b', 'text-halo-color': '#0a0d12', 'text-halo-width': 1.1 } }
+  ]
+};
+
+const q = new URLSearchParams(location.search);
+const map = new maplibregl.Map({
+  container: 'map', style,
+  center: [parseFloat(q.get('lng') || -120.3), parseFloat(q.get('lat') || 47.4)],
+  zoom: parseFloat(q.get('z') || 6.15), minzoom: 3, maxzoom: 17,
+  attributionControl: { compact: true }
+});
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+
+// ---------------------------------------------------------------------------
+// Timeline state (populated once data loads)
+// ---------------------------------------------------------------------------
+let Y0 = 0, totalDays = 1, durationMs = 1, minYear = 0, maxYear = 0;
+let playing = false, startWall = 0, startDays = 0, currentDays = 0;
+let mode = 'anim';
+
+function fmtDate(days) {
+  const d = new Date(Y0 + days * DAY);
+  return d.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+}
+
+// rough representative point for the glow (average of a polygon's outer coords)
+function repPoint(geom) {
+  let ring;
+  if (geom.type === 'Polygon') ring = geom.coordinates[0];
+  else { // MultiPolygon: pick the ring with the most vertices
+    ring = geom.coordinates.map(p => p[0]).sort((a, b) => b.length - a.length)[0];
+  }
+  let x = 0, y = 0;
+  for (const c of ring) { x += c[0]; y += c[1]; }
+  return [x / ring.length, y / ring.length];
+}
+
+// ---------------------------------------------------------------------------
+// Load fires, wire everything up
+// ---------------------------------------------------------------------------
+Promise.all([
+  fetch('data/wa_fires.geojson').then(r => r.json()),
+  new Promise(res => map.on('load', res))
+]).then(([fc]) => {
+  // derive the time window from the data and stamp event_days on each feature
+  let minJd = Infinity, maxJd = -Infinity;
+  for (const f of fc.features) {
+    const t = Date.parse(f.properties.ig_date);
+    f.properties._t = t;
+    f.properties.year = +f.properties.ig_date.slice(0, 4);
+    minJd = Math.min(minJd, t); maxJd = Math.max(maxJd, t);
+  }
+  minYear = new Date(minJd).getUTCFullYear();
+  maxYear = new Date(maxJd).getUTCFullYear();
+  Y0 = Date.UTC(minYear, 0, 1);
+  const Y1 = Date.UTC(maxYear, 11, 31);
+  totalDays = (Y1 - Y0) / DAY;
+  durationMs = (maxYear - minYear + 1) * SEC_PER_YEAR * 1000;
+  for (const f of fc.features) f.properties.event_days = (f.properties._t - Y0) / DAY;
+  document.getElementById('subtitle').textContent =
+    `${minYear}–${maxYear} · ${fc.features.length} fires · ${((durationMs / 1000) | 0)}s`;
+
+  // centroids for the glow layer
+  const pts = {
+    type: 'FeatureCollection',
+    features: fc.features.map(f => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: repPoint(f.geometry) },
+      properties: { event_days: f.properties.event_days, acres: f.properties.acres }
+    }))
+  };
+
+  map.addSource('fires', { type: 'geojson', data: fc });
+  // glow source holds only the handful of fires currently flaring (refreshed per step)
+  map.addSource('firepts', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  glowPts = pts.features;
+
+  // --- recency (animation) layers: one fill layer per ignition year ---------
+  // Paint values are CONSTANT scalars per layer (GPU uniforms), so advancing time
+  // costs a few scalar updates instead of recomputing per-vertex attributes.
+  // Added in ascending year order, so newer fires naturally draw on top.
+  for (let y = minYear; y <= maxYear; y++) {
+    yearLayers.push('yr-' + y);
+    map.addLayer({
+      id: 'yr-' + y, type: 'fill', source: 'fires',
+      filter: ['==', ['get', 'year'], y],          // static filter — never changes
+      paint: { 'fill-color': RAMP[RAMP.length - 1], 'fill-opacity': 0 }
+    });
+  }
+  map.addLayer({
+    id: 'rec-glow', type: 'circle', source: 'firepts',
+    paint: {
+      'circle-color': '#fff1a8', 'circle-blur': 0.85,
+      'circle-radius': ['interpolate', ['linear'], ['get', 'acres'],
+        100, 5, 2000, 14, 20000, 30, 60000, 46],
+      'circle-opacity': ['get', 'glow']            // static expression; data changes, paint doesn't
+    }
+  });
+
+  // --- explore (static) layers: fires colored by year ---
+  map.addLayer({
+    id: 'rest-fill', type: 'fill', source: 'fires',
+    layout: { visibility: 'none' },
+    paint: {
+      'fill-color': ['interpolate', ['linear'], ['get', 'year'],
+        minYear, '#4a1c0a', maxYear, '#ff7a1a'],
+      'fill-opacity': 0.6, 'fill-outline-color': '#ffb070'
+    }
+  });
+
+  buildLegend();
+  wireControls();
+  if (q.get('mode') === 'explore') { applyMode('explore'); }
+  else if (q.get('t') !== null) { applyMode('anim'); seek(parseFloat(q.get('t')) * totalDays); }
+  else { applyMode('anim'); seek(0); play(); }
+});
+
+// ---------------------------------------------------------------------------
+// Animation engine
+//
+// Cost model: the expensive thing in MapLibre is a *data-driven* paint property
+// (one that reads a feature attribute) — changing it re-derives and re-uploads
+// per-vertex attribute buffers for every feature in every tile. Doing that every
+// frame over ~87k vertices is what pinned this at 4.5 fps.
+//
+// So: fires are split into one layer per ignition year, each painted with plain
+// constant values (uniforms — zero per-vertex work). Advancing time = a handful of
+// scalar setPaintProperty calls, and only for the years whose appearance actually
+// changed. Updates are quantized to STEP_DAYS of simulated time rather than run
+// per frame, and the flare glow is driven by swapping a tiny source instead of
+// repainting all fires.
+// ---------------------------------------------------------------------------
+const STEP_DAYS = 20;            // simulated-time quantum for GL updates
+let yearLayers = [], glowPts = [];
+let lastStep = NaN, lastStyle = new Map(), lastGlowKey = '';
+
+// interpolate the RAMP / opacity stops in JS (mirrors the old GL expressions)
+const OPAC = [[0, 0.95], [120, 0.85], [365, 0.75], [1095, 0.65], [2920, 0.58], [1e5, 0.55]];
+function lerpStops(stops, x) {
+  if (x <= stops[0][0]) return stops[0][1];
+  for (let i = 1; i < stops.length; i++) {
+    if (x <= stops[i][0]) {
+      const [x0, y0] = stops[i - 1], [x1, y1] = stops[i];
+      return y0 + (y1 - y0) * ((x - x0) / (x1 - x0));
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+function rampColor(age) {
+  const stops = [];
+  for (let i = 0; i < RAMP.length; i += 2) stops.push([RAMP[i], RAMP[i + 1]]);
+  if (age <= stops[0][0]) return stops[0][1];
+  for (let i = 1; i < stops.length; i++) {
+    if (age <= stops[i][0]) {
+      const [x0, c0] = stops[i - 1], [x1, c1] = stops[i];
+      const t = (age - x0) / (x1 - x0), a = hex(c0), b = hex(c1);
+      return `rgb(${a.map((v, k) => Math.round(v + (b[k] - v) * t)).join(',')})`;
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+// A year's fires are aged from mid-season (Aug 1), the typical Western ignition
+// window, once that season is over. The *active* season is handled separately.
+function yearAge(year, cd) { return cd - ((Date.UTC(year, 7, 1) - Y0) / DAY); }
+
+function applyState(force) {
+  const cd = currentDays;
+  // cheap DOM readouts every call
+  document.getElementById('clock-date').textContent = fmtDate(cd);
+  const scrub = document.getElementById('scrub');
+  if (document.activeElement !== scrub) scrub.value = Math.round((cd / totalDays) * 1000);
+
+  const step = Math.floor(cd / STEP_DAYS);
+  if (step === lastStep && !force) return;      // no GL work between quanta
+  lastStep = step;
+
+  const curYear = new Date(Y0 + cd * DAY).getUTCFullYear();
+  for (let y = minYear; y <= maxYear; y++) {
+    const id = 'yr-' + y;
+    if (y === curYear) {
+      // Active season only: data-driven paint, so each fire appears on its real
+      // ignition date at full flare heat. Bounded to one year's geometry.
+      const age = ['-', cd, ['get', 'event_days']];
+      map.setPaintProperty(id, 'fill-color', ['interpolate', ['linear'], age, ...RAMP]);
+      map.setPaintProperty(id, 'fill-opacity',
+        ['case', ['<', age, 0], 0, ['interpolate', ['linear'], age, 0, 0.95, 120, 0.85, 365, 0.75]]);
+      lastStyle.set(id, 'active');
+      continue;
+    }
+    let color, opacity;
+    if (y > curYear) { color = null; opacity = 0; }          // hasn't happened yet
+    else { const age = Math.max(0, yearAge(y, cd)); color = rampColor(age); opacity = lerpStops(OPAC, age); }
+    // change detection: skip the call unless it would actually alter the frame
+    const key = color === null ? 'off' : color + '|' + opacity.toFixed(3);
+    if (lastStyle.get(id) === key && !force) continue;
+    lastStyle.set(id, key);
+    if (color !== null) map.setPaintProperty(id, 'fill-color', color);
+    map.setPaintProperty(id, 'fill-opacity', opacity);
+  }
+
+  // active-season reveal + flare glow: swap a tiny source instead of repainting all fires
+  const flaring = [];
+  for (const p of glowPts) {
+    const age = cd - p.properties.event_days;
+    if (age >= 0 && age < FLARE_DAYS) {
+      flaring.push({ type: 'Feature', geometry: p.geometry,
+        properties: { acres: p.properties.acres, glow: 0.9 * (1 - age / FLARE_DAYS) } });
+    }
+  }
+  const gkey = flaring.length + ':' + step;
+  if (gkey !== lastGlowKey) {
+    lastGlowKey = gkey;
+    map.getSource('firepts').setData({ type: 'FeatureCollection', features: flaring });
+  }
+}
+
+let runToken = 0;   // generation counter: only the newest run may drive the loop
+
+function play() {
+  if (mode !== 'anim') applyMode('anim');
+  if (currentDays >= totalDays) currentDays = 0;   // replay from the top
+  playing = true;
+  startWall = performance.now(); startDays = currentDays;
+  document.getElementById('play').textContent = 'Pause';
+  const myRun = ++runToken;
+  const step = () => {
+    if (myRun !== runToken || !playing) return;   // a newer run (or stop) supersedes this loop
+    const elapsed = performance.now() - startWall;
+    currentDays = startDays + (elapsed / durationMs) * totalDays;
+    if (currentDays >= totalDays) { currentDays = totalDays; applyState(true); stop(); return; }
+    applyState(false);
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+function stop() {
+  playing = false; runToken++;   // invalidate whatever loop is running
+  document.getElementById('play').textContent = currentDays >= totalDays ? 'Replay' : 'Play';
+}
+function seek(days) {
+  currentDays = Math.max(0, Math.min(totalDays, days));
+  applyState(true);            // scrubbing jumps time — force a full refresh
+  if (playing) { startWall = performance.now(); startDays = currentDays; }
+}
+
+// ---------------------------------------------------------------------------
+// Modes & controls
+// ---------------------------------------------------------------------------
+function applyMode(m) {
+  mode = m;
+  const anim = m === 'anim';
+  for (const id of [...yearLayers, 'rec-glow'])
+    map.setLayoutProperty(id, 'visibility', anim ? 'visible' : 'none');
+  map.setLayoutProperty('rest-fill', 'visibility', anim ? 'none' : 'visible');
+  document.getElementById('mode-anim').classList.toggle('on', anim);
+  document.getElementById('mode-explore').classList.toggle('on', !anim);
+  document.getElementById('play').style.display = anim ? '' : 'none';
+  document.getElementById('scrub').style.display = anim ? '' : 'none';
+  document.getElementById('clock').style.display = anim ? '' : 'none';
+  if (!anim) stop();
+  buildLegend();
+}
+
+function buildLegend() {
+  const title = document.getElementById('legend-title');
+  const body = document.getElementById('legend-body');
+  if (mode === 'anim') {
+    title.textContent = 'Fire recency';
+    body.innerHTML = `
+      <div class="row"><span class="sw" style="background:#fff2b0"></span>This season</div>
+      <div class="row"><span class="sw" style="background:#ff5f1a"></span>~1 year ago</div>
+      <div class="row"><span class="sw" style="background:#e83c17"></span>~3 years ago</div>
+      <div class="row"><span class="sw" style="background:#8f2a15"></span>Older</div>`;
+  } else {
+    title.textContent = 'Explore · by year';
+    body.innerHTML = `
+      <div class="row"><span class="sw" style="background:#4a1c0a"></span>${minYear}</div>
+      <div class="row"><span class="sw" style="background:#ff7a1a"></span>${maxYear}</div>
+      <div class="row" style="color:var(--dim);margin-top:5px">Severity coloring<br>arrives with the raster build</div>`;
+  }
+}
+
+function wireControls() {
+  document.getElementById('play').onclick = () => (playing ? stop() : play());
+  document.getElementById('scrub').oninput = e => seek((e.target.value / 1000) * totalDays);
+  document.getElementById('mode-anim').onclick = () => { applyMode('anim'); renderFrame(); };
+  document.getElementById('mode-explore').onclick = () => applyMode('explore');
+
+  const toggleGroup = (id, ...prefixes) => {
+    document.getElementById(id).onchange = e => {
+      const v = e.target.checked ? 'visible' : 'none';
+      for (const lyr of map.getStyle().layers)
+        if (prefixes.some(p => lyr.id.startsWith(p))) map.setLayoutProperty(lyr.id, 'visibility', v);
+    };
+  };
+  toggleGroup('lyr-cities', 'place-');
+  toggleGroup('lyr-rivers', 'waterway-');
+  toggleGroup('lyr-roads', 'road-');
+  document.getElementById('lyr-sat').onchange = e => {
+    map.setLayoutProperty('satellite', 'visibility', e.target.checked ? 'visible' : 'none');
+    // dim the country/state lines less over imagery; brighten for contrast
+    map.setPaintProperty('boundary-state', 'line-color', e.target.checked ? '#ffffff' : '#2e3946');
+  };
+
+  // click any fire for its details (works in both modes)
+  const popup = (e) => {
+    const p = e.features[0].properties;
+    new maplibregl.Popup().setLngLat(e.lngLat)
+      .setHTML(`<b>${p.name}</b><br>${p.ig_date} · ${Math.round(p.acres).toLocaleString()} ac`
+        + `<br><span style="color:#7a8794">${p.type} · ${p.asmnt} assessment</span>`)
+      .addTo(map);
+  };
+  for (const l of [...yearLayers, 'rest-fill']) {
+    map.on('click', l, popup);
+    map.on('mouseenter', l, () => map.getCanvas().style.cursor = 'pointer');
+    map.on('mouseleave', l, () => map.getCanvas().style.cursor = '');
+  }
+}
+</script>
+</body>
+</html>
