@@ -51,6 +51,8 @@
     }
     #year::before { top: -12px; transform: translateX(-50%) rotate(-45deg); }
     #year::after { bottom: -12px; transform: translateX(-50%) rotate(135deg); }
+    /* At either end of the range, drop the arrow that points nowhere. */
+    #year.at-min::after, #year.at-max::before { display: none; }
     /* MapLibre ships compact attribution but also adds -show, which forces the text open.
        Override that: collapse to just the (i), and reveal on hover or click (<details open>). */
     .maplibregl-ctrl-attrib.maplibregl-compact-show { padding: 2px 24px 2px 0; }
@@ -280,6 +282,8 @@ function placeHandle() {
   const el = document.getElementById('year');
   el.style.bottom = (RAIL_PAD + t * span) + 'px';
   el.textContent = years[idx] ?? '—';
+  el.classList.toggle('at-min', idx <= 0);           // 1984: only the up arrow
+  el.classList.toggle('at-max', N > 0 && idx >= N - 1);   // 2024: only the down arrow
   const r = rail();
   r.setAttribute('aria-valuemin', 0);
   r.setAttribute('aria-valuemax', Math.max(0, N - 1));
