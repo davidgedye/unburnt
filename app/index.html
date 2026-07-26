@@ -274,7 +274,12 @@ for (let a = 0; a < AGES; a++) {
 // are no data-driven expressions, no time quantisation, and no cached-state tracking.
 // N yearly states, and that is the entire state space.
 // ---------------------------------------------------------------------------
-let years = [], layers = [], N = 0, idx = 0, timer = null;
+let years = [], layers = [], N = 0, idx = 0, raf = null, fires = [], popup = null;
+const NOTHING = { type: 'FeatureCollection', features: [] };
+// `pos` is the handle's position as a *fractional* year index. It is presentation only: the map
+// still has exactly N integer states, and `idx` is still the whole of the animation's state.
+// Decoupling the two is what lets the handle glide while the fires step.
+let pos = 0;
 
 function show(i) {
   idx = Math.max(0, Math.min(N - 1, i));
@@ -283,8 +288,10 @@ function show(i) {
     map.setPaintProperty(layers[k], 'fill-opacity', a < 0 ? 0 : OPACITY[a]);
     if (a >= 0) map.setPaintProperty(layers[k], 'fill-color', COLOR[a]);
   }
-  placeHandle();
+  labelHandle();
 }
+
+function snapTo(i) { show(i); moveHandle(i); }      // jump both together
 
 // --- Year rail -------------------------------------------------------------
 // The handle's travel is inset from the window edges so the lozenge never half-leaves the
@@ -297,11 +304,19 @@ function railGeom() {
   return { top: r.top, height: r.height, span: Math.max(1, r.height - 2 * RAIL_PAD) };
 }
 
-function placeHandle() {
+// Position only — a float year index. Cheap enough to call every frame: it writes one CSS
+// length and touches nothing MapLibre owns.
+function moveHandle(p) {
+  pos = Math.max(0, Math.min(N - 1, p));
   const { span } = railGeom();
-  const t = N > 1 ? idx / (N - 1) : 0;                // 0 = earliest, at the bottom
+  const t = N > 1 ? pos / (N - 1) : 0;                // 0 = earliest, at the bottom
+  document.getElementById('year').style.bottom = (RAIL_PAD + t * span) + 'px';
+}
+
+// Text and state — driven by the integer year, so the label never shows a year the map is not
+// actually displaying, however far between years the handle happens to sit.
+function labelHandle() {
   const el = document.getElementById('year');
-  el.style.bottom = (RAIL_PAD + t * span) + 'px';
   el.textContent = years[idx] ?? '—';
   el.classList.toggle('at-min', idx <= 0);           // 1984: only the up arrow
   el.classList.toggle('at-max', N > 0 && idx >= N - 1);   // 2024: only the down arrow
@@ -312,50 +327,123 @@ function placeHandle() {
   r.setAttribute('aria-valuetext', years[idx] ?? '');
 }
 
-function yearAtY(clientY) {
+function posAtY(clientY) {
   const g = railGeom();
   const fromBottom = g.top + g.height - clientY;      // invert: y grows downward, years upward
   const t = (fromBottom - RAIL_PAD) / g.span;
-  return Math.round(Math.max(0, Math.min(1, t)) * (N - 1));
+  return Math.max(0, Math.min(1, t)) * (N - 1);
 }
 
+// Driven by rAF rather than setInterval so the handle advances with the display refresh instead
+// of once per year. The map is still repainted only when the integer year changes — the frame
+// loop moves a DOM element and nothing else.
 function play() {
-  if (idx >= N - 1) show(0);                        // replay from the top
-  clearInterval(timer);
-  timer = setInterval(() => {
-    if (idx >= N - 1) { pause(); dlog('DONE — final year shown, no further updates'); return; }
-    show(idx + 1);
-    dlog(`${years[idx]}  (state ${idx + 1}/${N})`);
-  }, YEAR_MS);
+  if (idx >= N - 1) snapTo(0);                       // replay from the top
+  cancelAnimationFrame(raf);
+  const from = pos, t0 = performance.now();
+  const frame = now => {
+    const p = Math.min(N - 1, from + (now - t0) / YEAR_MS);
+    moveHandle(p);
+    const yr = Math.floor(p + 1e-6);
+    if (yr !== idx) { show(yr); dlog(`${years[idx]}  (state ${idx + 1}/${N})`); }
+    if (p >= N - 1) { raf = null; show(N - 1); dlog('DONE — final year shown, no further updates'); return; }
+    raf = requestAnimationFrame(frame);
+  };
+  raf = requestAnimationFrame(frame);
 }
-function pause() { clearInterval(timer); timer = null; }
+function pause() { cancelAnimationFrame(raf); raf = null; }
+
+// "1990-09-07" -> "7 September 1990".
+// The 'T00:00' matters: a bare "1990-09-07" is parsed as UTC and renders as the 6th anywhere
+// west of Greenwich, i.e. everywhere this map covers. With a time and no Z it is local.
+function longDate(iso) {
+  const d = new Date(iso + 'T00:00');
+  return isNaN(d) ? iso
+    : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+// Removing the popup fires its close handler, which clears the outline — so this takes down
+// both. Safe to call when nothing is open.
+function closePopup() { if (popup) { popup.remove(); popup = null; } }
+
+// Keep the panel off the burn it describes. The fire's screen bounding box decides which side
+// has room; anchor names are where the *popup's* own edge sits, so 'bottom' puts it above the
+// shape, 'top' below, 'right' to the left, 'left' to the right.
+const POPUP_W = 240, POPUP_H = 96, GAP = 14, RAIL_W = 56;
+function popupPlacement(feature, fallback) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, n = 0;
+  const visit = c => {
+    if (typeof c[0] === 'number') {
+      const q = map.project(c);
+      if (q.x < minX) minX = q.x;
+      if (q.x > maxX) maxX = q.x;
+      if (q.y < minY) minY = q.y;
+      if (q.y > maxY) maxY = q.y;
+      n++;
+    } else for (const part of c) visit(part);
+  };
+  if (feature?.geometry) visit(feature.geometry.coordinates);
+  if (!n) return { lngLat: fallback, anchor: 'bottom' };
+
+  const W = innerWidth, H = innerHeight;
+  const room = { bottom: minY - GAP, top: H - maxY - GAP,
+                 right: minX - GAP, left: W - RAIL_W - maxX - GAP };
+  const need = { bottom: POPUP_H, top: POPUP_H, right: POPUP_W, left: POPUP_W };
+  // Above, then below, then the sides — reading order, and vertical displacement hides less map.
+  const pick = ['bottom', 'top', 'right', 'left'].find(a => room[a] >= need[a]);
+  if (!pick) return { lngLat: fallback, anchor: 'bottom' };   // a burn filling the screen
+
+  // Centre along the shared edge, pulled back far enough that the panel stays on screen when
+  // the fire runs off it.
+  const cx = Math.min(Math.max((minX + maxX) / 2, POPUP_W / 2 + GAP), W - RAIL_W - POPUP_W / 2 - GAP);
+  const cy = Math.min(Math.max((minY + maxY) / 2, POPUP_H / 2 + GAP), H - POPUP_H / 2 - GAP);
+  const at = { bottom: [cx, minY], top: [cx, maxY], right: [minX, cy], left: [maxX, cy] }[pick];
+  return { lngLat: map.unproject(at), anchor: pick };
+}
 
 function wireControls() {
   // Dragging anywhere in the rail scrubs. Pointer capture keeps the drag alive when the finger
   // or cursor wanders off the 56px strip, which on a phone it constantly does.
   const r = rail();
   let dragging = false;
+  // The handle follows the pointer exactly, so the drag feels 1:1; the map only repaints when
+  // the rounded year changes. Without that guard every pointermove would rewrite N paint
+  // properties, which is the expensive half of this loop.
+  const track = clientY => {
+    const p = posAtY(clientY);
+    moveHandle(p);
+    const yr = Math.round(p);
+    if (yr !== idx) show(yr);
+  };
   r.addEventListener('pointerdown', e => {
+    // A popup describes one year's fire; scrubbing away from that year makes it stale, and it
+    // would sit over the map with its outline pointing at nothing.
+    closePopup();
     dragging = true; pause(); r.setPointerCapture(e.pointerId);
-    show(yearAtY(e.clientY)); e.preventDefault();
+    track(e.clientY); e.preventDefault();
   });
-  r.addEventListener('pointermove', e => { if (dragging) show(yearAtY(e.clientY)); });
-  const end = e => { dragging = false; if (r.hasPointerCapture(e.pointerId)) r.releasePointerCapture(e.pointerId); };
+  r.addEventListener('pointermove', e => { if (dragging) track(e.clientY); });
+  const end = e => {
+    if (!dragging) return;
+    dragging = false;
+    moveHandle(idx);                                 // settle onto the year it landed on
+    if (r.hasPointerCapture(e.pointerId)) r.releasePointerCapture(e.pointerId);
+  };
   r.addEventListener('pointerup', end);
   r.addEventListener('pointercancel', end);
 
   r.addEventListener('keydown', e => {
     const step = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1,
                    PageUp: 5, PageDown: -5 }[e.key];
-    if (step) { pause(); show(idx + step); }
-    else if (e.key === 'Home') { pause(); show(0); }
-    else if (e.key === 'End') { pause(); show(N - 1); }
+    if (step) { closePopup(); pause(); snapTo(idx + step); }
+    else if (e.key === 'Home') { closePopup(); pause(); snapTo(0); }
+    else if (e.key === 'End') { closePopup(); pause(); snapTo(N - 1); }
     else return;
     e.preventDefault();
   });
 
   // Rail height changes on resize and rotation, so the handle has to be re-placed.
-  addEventListener('resize', placeHandle);
+  addEventListener('resize', () => moveHandle(pos));
   // Pointer cursor over a clickable fire (a point query, not a viewport-wide one — those are
   // costly and nudge MapLibre's render state). Empty string restores the default grab hand.
   map.on('mousemove', e => {
@@ -370,12 +458,25 @@ function wireControls() {
     pause();
     const hits = map.queryRenderedFeatures(e.point, { layers })
       .filter(f => f.properties.year <= years[idx]);   // ignore years not yet shown
+    // Close first: removing a popup fires its close handler, which clears the outline. Doing it
+    // before the new one is drawn stops the old handler wiping the new selection.
+    closePopup();
     if (!hits.length) return;
     const p = hits[0].properties;
-    new maplibregl.Popup().setLngLat(e.lngLat)
-      .setHTML(`<b>${p.name}</b><br>${p.ig_date} · ${Math.round(p.acres).toLocaleString()} ac`
-        + `<br><span style="color:#7a8794">${p.type} · ${p.asmnt} assessment</span>`)
+    // Always three lines: name, date, acreage. Type and assessment are dropped — 87% of these
+    // are "Wildfire" and 62% "Initial", so the words carried almost no information. The one
+    // feature with no acreage still gets a third line, rather than a stray "0 acres".
+    const acres = p.acres == null ? 'acreage unknown'
+                                  : `${Math.round(p.acres).toLocaleString()} acres`;
+    // Stroke the fire being described, from the full original geometry rather than the clipped
+    // copy the query returned.
+    const feature = fires[p.fid];
+    map.getSource('sel').setData(feature ?? NOTHING);
+    const { lngLat, anchor } = popupPlacement(feature, e.lngLat);
+    popup = new maplibregl.Popup({ anchor, offset: GAP }).setLngLat(lngLat)
+      .setHTML(`<b>${p.name}</b><br>${longDate(p.ig_date)}<br>${acres}`)
       .addTo(map);
+    popup.on('close', () => map.getSource('sel')?.setData(NOTHING));
   });
 }
 
@@ -396,10 +497,12 @@ async function loadFires(url) {
 
 Promise.all([loadFires(DS.file), new Promise(res => map.on('load', res))]).then(([fc]) => {
   const seen = new Set();
-  for (const f of fc.features) {
+  fc.features.forEach((f, i) => {
     f.properties.year = +f.properties.ig_date.slice(0, 4);
+    f.properties.fid = i;              // identifies the clicked fire; indexes back into `fires`
     seen.add(f.properties.year);
-  }
+  });
+  fires = fc.features;
   years = [...seen].sort((a, b) => a - b);
   N = years.length;
 
@@ -415,6 +518,16 @@ Promise.all([loadFires(DS.file), new Promise(res => map.on('load', res))]).then(
     });
   });
 
+  // The selected fire's outline. Its own tiny source rather than a filter on `fires`: changing
+  // a filter on an 11k-feature layer re-lays it out, and the geometry that comes back from
+  // queryRenderedFeatures is clipped at tile edges, which would stroke only part of a big burn.
+  // Added last, so it sits above every year layer.
+  map.addSource('sel', { type: 'geojson', data: NOTHING });
+  map.addLayer({
+    id: 'sel-line', type: 'line', source: 'sel',
+    paint: { 'line-color': '#fff2b0', 'line-width': 2, 'line-opacity': 0.95 }
+  });
+
   // Only a non-default dataset is named: on the full West the heading already says so, and
   // repeating it wastes the line. The ?data=wa slice still needs the label to be obvious.
   const region = DS === DATASETS.west ? '' : `${DS.label} · `;
@@ -424,8 +537,8 @@ Promise.all([loadFires(DS.file), new Promise(res => map.on('load', res))]).then(
   wireControls();
   dlog(`${fc.features.length} fires, ${N} yearly states, ${layers.length} layers`);
   const jump = years.indexOf(+q.get('year'));        // ?year=1995 parks there, for sharing/testing
-  if (jump >= 0) show(jump);
-  else { show(0); play(); }
+  if (jump >= 0) snapTo(jump);
+  else { snapTo(0); play(); }
 });
 </script>
 </body>
