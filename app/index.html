@@ -20,27 +20,27 @@
     #title { top: 12px; left: 12px; padding: 10px 14px; max-width: 300px; }
     #title b { color: #fff; font-size: 15px; }
     #title span { color: var(--dim); font-size: 12px; }
-    /* Timeline (bottom) — play button, season clock, scrubber */
-    #timeline { left: 12px; right: 12px; bottom: 12px; padding: 10px 14px;
-      display: flex; align-items: center; gap: 13px; }
-    #play {
-      flex: none; width: 38px; height: 38px; border-radius: 50%; cursor: pointer;
-      background: var(--hot); border: none; padding: 0;
-      display: grid; place-items: center; -webkit-tap-highlight-color: transparent;
+    /* Year scrubber — an invisible full-height rail down the right edge. There is no track:
+       the only thing drawn is the handle, a lozenge carrying the year it is parked on. Grabbing
+       anywhere in the rail jumps to that year, so it reads as "drag me up and down". Custom
+       pointer handling rather than <input type=range>: vertical ranges still need two different
+       vendor mechanisms and disagree on which end is the minimum, and the track cannot be
+       reliably hidden — driving it directly is both shorter and predictable everywhere. */
+    #rail {
+      position: absolute; top: 0; right: 0; bottom: 0; width: 56px; z-index: 3;
+      touch-action: none;                  /* a vertical drag scrubs; it must not scroll or pan */
+      cursor: grab; -webkit-tap-highlight-color: transparent;
     }
-    #play:hover { filter: brightness(1.12); }
-    #play svg { display: block; fill: #150a02; }
-    #clock { font: 700 15px/1 ui-monospace, monospace; color: #fff;
-      min-width: 112px; letter-spacing: .02em; }
-    #clock small { display: block; font: 500 10px system-ui; color: var(--dim);
-      letter-spacing: .1em; text-transform: uppercase; margin-bottom: 3px; }
-    #scrub { flex: 1; accent-color: var(--hot); height: 4px; cursor: pointer; min-width: 0; }
-    /* Legend (bottom-left, above timeline) */
-    #legend { left: 12px; bottom: 78px; padding: 9px 12px; font-size: 12px; }
-    #legend .row { display: flex; align-items: center; gap: 7px; margin: 3px 0; }
-    #legend .sw { width: 22px; height: 10px; border-radius: 2px; }
-    #legend h4 { margin: 0 0 5px; font-size: 11px; letter-spacing: .06em;
-      text-transform: uppercase; color: var(--dim); font-weight: 600; }
+    #rail:active { cursor: grabbing; }
+    #rail:focus { outline: none; }
+    #rail:focus-visible #year { box-shadow: 0 0 0 2px #fff, 0 4px 14px rgba(0,0,0,.55); }
+    #year {
+      position: absolute; right: 12px; bottom: 0; transform: translateY(50%);
+      background: var(--hot); color: #150a02; padding: 9px 13px; border-radius: 999px;
+      font: 700 15px/1 ui-monospace, monospace; font-variant-numeric: tabular-nums;
+      letter-spacing: .02em; pointer-events: none;   /* the rail owns every pointer event */
+      box-shadow: 0 4px 14px rgba(0,0,0,.55);
+    }
     /* MapLibre ships compact attribution but also adds -show, which forces the text open.
        Override that: collapse to just the (i), and reveal on hover or click (<details open>). */
     .maplibregl-ctrl-attrib.maplibregl-compact-show { padding: 2px 24px 2px 0; }
@@ -64,15 +64,8 @@
   <span id="subtitle">loading…</span>
 </div>
 
-<div id="legend" class="panel">
-  <h4 id="legend-title">Fire recency</h4>
-  <div id="legend-body"></div>
-</div>
-
-<div id="timeline" class="panel">
-  <button id="play" aria-label="Play"></button>
-  <div id="clock"><small>Season</small><span id="clock-date">—</span></div>
-  <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Timeline">
+<div id="rail" role="slider" tabindex="0" aria-label="Year" aria-orientation="vertical">
+  <div id="year">—</div>
 </div>
 
 <script>
@@ -204,10 +197,11 @@ const map = new maplibregl.Map({
   container: 'map', style,
   center: [parseFloat(q.get('lng') || DS.center[0]), parseFloat(q.get('lat') || DS.center[1])],
   zoom: parseFloat(q.get('z') || DS.zoom), minzoom: 3, maxzoom: 17,
-  attributionControl: false                // re-added top-right, clear of the timeline
+  attributionControl: false                // re-added bottom-left, clear of the year rail
 });
-map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-map.addControl(new maplibregl.AttributionControl({ compact: true }), 'top-right');
+// Both live bottom-left: the whole right edge belongs to the year rail.
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-left');
+map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left');
 // MapLibre renders the attribution <details> already open, so it shows as a wide pill. Close it
 // once so it starts as just the (i); clicking/tapping the (i) still toggles it open (see CSS).
 map.on('load', () => document.querySelector('.maplibregl-ctrl-attrib')?.removeAttribute('open'));
@@ -256,17 +250,38 @@ function show(i) {
     map.setPaintProperty(layers[k], 'fill-opacity', a < 0 ? 0 : OPACITY[a]);
     if (a >= 0) map.setPaintProperty(layers[k], 'fill-color', COLOR[a]);
   }
-  document.getElementById('clock-date').textContent = years[idx];
-  const s = document.getElementById('scrub');
-  if (document.activeElement !== s) s.value = idx;
+  placeHandle();
 }
 
-const ICON_PLAY = '<svg width="14" height="16" viewBox="0 0 14 16"><path d="M1 1l12 7-12 7z"/></svg>';
-const ICON_PAUSE = '<svg width="12" height="16" viewBox="0 0 12 16"><rect x="0" y="1" width="4" height="14" rx="1"/><rect x="8" y="1" width="4" height="14" rx="1"/></svg>';
-function setPlayIcon() {
-  const b = document.getElementById('play');
-  b.innerHTML = timer ? ICON_PAUSE : ICON_PLAY;
-  b.setAttribute('aria-label', timer ? 'Pause' : (idx >= N - 1 ? 'Replay' : 'Play'));
+// --- Year rail -------------------------------------------------------------
+// The handle's travel is inset from the window edges so the lozenge never half-leaves the
+// screen at either end. Geometry is read live rather than cached: the map is full-bleed, so
+// a rotation or resize changes the rail height under us.
+const RAIL_PAD = 44;                                  // px of travel reserved at each end
+const rail = () => document.getElementById('rail');
+function railGeom() {
+  const r = rail().getBoundingClientRect();
+  return { top: r.top, height: r.height, span: Math.max(1, r.height - 2 * RAIL_PAD) };
+}
+
+function placeHandle() {
+  const { span } = railGeom();
+  const t = N > 1 ? idx / (N - 1) : 0;                // 0 = earliest, at the bottom
+  const el = document.getElementById('year');
+  el.style.bottom = (RAIL_PAD + t * span) + 'px';
+  el.textContent = years[idx] ?? '—';
+  const r = rail();
+  r.setAttribute('aria-valuemin', 0);
+  r.setAttribute('aria-valuemax', Math.max(0, N - 1));
+  r.setAttribute('aria-valuenow', idx);
+  r.setAttribute('aria-valuetext', years[idx] ?? '');
+}
+
+function yearAtY(clientY) {
+  const g = railGeom();
+  const fromBottom = g.top + g.height - clientY;      // invert: y grows downward, years upward
+  const t = (fromBottom - RAIL_PAD) / g.span;
+  return Math.round(Math.max(0, Math.min(1, t)) * (N - 1));
 }
 
 function play() {
@@ -277,23 +292,35 @@ function play() {
     show(idx + 1);
     dlog(`${years[idx]}  (state ${idx + 1}/${N})`);
   }, YEAR_MS);
-  setPlayIcon();
 }
-function pause() { clearInterval(timer); timer = null; setPlayIcon(); }
-
-function buildLegend() {
-  document.getElementById('legend-title').textContent = 'Fire recency';
-  document.getElementById('legend-body').innerHTML =
-    `<div class="row"><span class="sw" style="background:${COLOR[0]}"></span>This year</div>` +
-    `<div class="row"><span class="sw" style="background:${COLOR[1]}"></span>1 year ago</div>` +
-    `<div class="row"><span class="sw" style="background:${COLOR[3]}"></span>3 years ago</div>` +
-    `<div class="row"><span class="sw" style="background:${COLOR[AGES - 1]}"></span>Older</div>` +
-    `<div class="row" style="color:var(--dim);margin-top:5px">Click the map to pause</div>`;
-}
+function pause() { clearInterval(timer); timer = null; }
 
 function wireControls() {
-  document.getElementById('play').onclick = () => (timer ? pause() : play());
-  document.getElementById('scrub').oninput = e => { pause(); show(+e.target.value); };
+  // Dragging anywhere in the rail scrubs. Pointer capture keeps the drag alive when the finger
+  // or cursor wanders off the 56px strip, which on a phone it constantly does.
+  const r = rail();
+  let dragging = false;
+  r.addEventListener('pointerdown', e => {
+    dragging = true; pause(); r.setPointerCapture(e.pointerId);
+    show(yearAtY(e.clientY)); e.preventDefault();
+  });
+  r.addEventListener('pointermove', e => { if (dragging) show(yearAtY(e.clientY)); });
+  const end = e => { dragging = false; if (r.hasPointerCapture(e.pointerId)) r.releasePointerCapture(e.pointerId); };
+  r.addEventListener('pointerup', end);
+  r.addEventListener('pointercancel', end);
+
+  r.addEventListener('keydown', e => {
+    const step = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1,
+                   PageUp: 5, PageDown: -5 }[e.key];
+    if (step) { pause(); show(idx + step); }
+    else if (e.key === 'Home') { pause(); show(0); }
+    else if (e.key === 'End') { pause(); show(N - 1); }
+    else return;
+    e.preventDefault();
+  });
+
+  // Rail height changes on resize and rotation, so the handle has to be re-placed.
+  addEventListener('resize', placeHandle);
   // Pointer cursor over a clickable fire (a point query, not a viewport-wide one — those are
   // costly and nudge MapLibre's render state). Empty string restores the default grab hand.
   map.on('mousemove', e => {
@@ -357,12 +384,7 @@ Promise.all([loadFires(DS.file), new Promise(res => map.on('load', res))]).then(
   document.getElementById('subtitle').textContent =
     `${years[0]}–${years[N - 1]} · ${fc.features.length.toLocaleString()} fires · ` +
     `${Math.round(N * YEAR_MS / 1000)}s · build ${BUILD}`;
-  const s = document.getElementById('scrub');
-  s.min = 0; s.max = N - 1; s.step = 1; s.value = 0;
-
   wireControls();
-  buildLegend();
-  setPlayIcon();          // the ?year= path never calls play(), so paint the icon here
   dlog(`${fc.features.length} fires, ${N} yearly states, ${layers.length} layers`);
   const jump = years.indexOf(+q.get('year'));        // ?year=1995 parks there, for sharing/testing
   if (jump >= 0) show(jump);
