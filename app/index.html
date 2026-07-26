@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>40 years of fire — Western US</title>
+  <title>Wildfires of the West</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
   <link href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" rel="stylesheet">
@@ -72,7 +72,7 @@
 <div id="map"></div>
 
 <div id="title" class="panel">
-  <b>40 years of fire — <span id="region">…</span></b><br>
+  <b>Wildfires of the West</b><br>
   <span id="subtitle">loading…</span>
 </div>
 
@@ -163,10 +163,15 @@ const style = {
     // boundaries
     { id: 'boundary-state', type: 'line', source: 'omt', 'source-layer': 'boundary',
       filter: ['all', ['==', 'admin_level', 4], ['!=', 'maritime', 1]],
-      paint: { 'line-color': '#2e3946', 'line-width': 0.8, 'line-dasharray': [3, 2] } },
+      // Cool grey-blue, well clear of the #0a0d12 background but not competing with the fires:
+      // state lines are the frame you read the animation against, so they have to survive
+      // being crossed by orange. Width grows with zoom so they stay legible when zoomed out.
+      paint: { 'line-color': '#61748c', 'line-width': ['interpolate', ['linear'], ['zoom'],
+                 3, 0.9, 6, 1.5, 10, 2.1], 'line-dasharray': [3, 2] } },
     { id: 'boundary-country', type: 'line', source: 'omt', 'source-layer': 'boundary',
       filter: ['all', ['<=', 'admin_level', 2], ['!=', 'maritime', 1]],
-      paint: { 'line-color': '#404e5e', 'line-width': 1.1 } },
+      paint: { 'line-color': '#8698ab', 'line-width': ['interpolate', ['linear'], ['zoom'],
+                 3, 1.2, 6, 1.9, 10, 2.6] } },
 
     // places: dots + tiered labels — city/town, then village/hamlet on zoom
     { id: 'place-dot', type: 'circle', source: 'omt', 'source-layer': 'place',
@@ -195,9 +200,13 @@ const style = {
 const q = new URLSearchParams(location.search);
 
 // ?data=west (default, 11 Western states) | ?data=wa (the WA test slice)
+// `bounds` is the extent the opening view is fitted to — the full footprint of the data, rounded
+// out to the state edges beyond it (the westernmost fire stops short of the Pacific coastline).
 const DATASETS = {
-  west: { file: 'data/west_fires.geojson.gz', label: 'Western US', center: [-116.0, 41.3], zoom: 4.15 },
-  wa:   { file: 'data/wa_fires.geojson.gz',   label: 'Washington', center: [-120.3, 47.4], zoom: 6.15 }
+  west: { file: 'data/west_fires.geojson.gz', label: 'Western US',
+          center: [-116.0, 41.3], zoom: 4.15, bounds: [[-124.9, 31.2], [-101.9, 49.1]] },
+  wa:   { file: 'data/wa_fires.geojson.gz',   label: 'Washington',
+          center: [-120.3, 47.4], zoom: 6.15, bounds: [[-124.9, 45.4], [-116.8, 49.2]] }
 };
 const DS = DATASETS[q.get('data')] || DATASETS.west;
 const DEBUG = q.has('debug');
@@ -205,10 +214,22 @@ const YEAR_MS = 750;                       // one year per 0.75s of screen time
 
 function dlog(...a) { if (DEBUG) console.log(`[${BUILD}]`, ...a); }
 
+// Opening view fits the whole dataset to the viewport, so every state is on screen whatever the
+// window shape — a fixed zoom cannot do that (4.15 framed a laptop and clipped a phone).
+// ?lng/?lat/?z still pin an exact camera, for sharing and for testing a specific spot.
+const hasCamera = q.has('lng') || q.has('lat') || q.has('z');
+const fitPadding = () => {
+  const p = Math.max(10, Math.round(Math.min(innerWidth, innerHeight) * 0.045));
+  return { top: p, bottom: p, left: p, right: p + 26 };   // extra right: the handle floats there
+};
+
 const map = new maplibregl.Map({
   container: 'map', style,
-  center: [parseFloat(q.get('lng') || DS.center[0]), parseFloat(q.get('lat') || DS.center[1])],
-  zoom: parseFloat(q.get('z') || DS.zoom), minzoom: 3, maxzoom: 17,
+  ...(hasCamera
+    ? { center: [parseFloat(q.get('lng') || DS.center[0]), parseFloat(q.get('lat') || DS.center[1])],
+        zoom: parseFloat(q.get('z') || DS.zoom) }
+    : { bounds: DS.bounds, fitBoundsOptions: { padding: fitPadding() } }),
+  minzoom: 2.5, maxzoom: 17,               // 2.5, so a very small window can still fit the West
   attributionControl: false                // re-added bottom-left, clear of the year rail
 });
 // Both live bottom-left: the whole right edge belongs to the year rail.
@@ -394,9 +415,11 @@ Promise.all([loadFires(DS.file), new Promise(res => map.on('load', res))]).then(
     });
   });
 
-  document.getElementById('region').textContent = DS.label;
+  // Only a non-default dataset is named: on the full West the heading already says so, and
+  // repeating it wastes the line. The ?data=wa slice still needs the label to be obvious.
+  const region = DS === DATASETS.west ? '' : `${DS.label} · `;
   document.getElementById('subtitle').textContent =
-    `${years[0]}–${years[N - 1]} · ${fc.features.length.toLocaleString()} fires · ` +
+    `${region}${years[0]}–${years[N - 1]} · ${fc.features.length.toLocaleString()} fires · ` +
     `${Math.round(N * YEAR_MS / 1000)}s · build ${BUILD}`;
   wireControls();
   dlog(`${fc.features.length} fires, ${N} yearly states, ${layers.length} layers`);
