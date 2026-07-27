@@ -616,7 +616,7 @@ Promise.all([loadFires(DS.file), new Promise(res => map.on('load', res))]).then(
   const region = DS === DATASETS.west ? '' : `${DS.label} · `;
   document.getElementById('subtitle').textContent =
     `${region}${years[0]}–${years[N - 1]} · ${fc.features.length.toLocaleString()} fires · ` +
-    `${Math.round(N * YEAR_MS / 1000)}s · build ${BUILD}`;
+    `build ${BUILD}`;
   wireControls();
   dlog(`${fc.features.length} fires, ${N} yearly states, ${layers.length} layers`);
   const jump = years.indexOf(+q.get('year'));        // ?year=1995 parks there, for sharing/testing
