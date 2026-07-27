@@ -102,6 +102,9 @@
     .maplibregl-popup-content b { color: #fff; }
     .maplibregl-popup-tip { border-top-color: #12161d !important;
       border-bottom-color: #12161d !important; }
+    /* Same mid-tone as the prescribed-fire map ramp, so the popup's callout ties back to the
+       blue fill the click came from. */
+    .rx-tag { color: #5fc7e8; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -119,6 +122,10 @@
     <p>Drag the year handle on the right to move through time. Click any fire for its name,
        date and size. Tap the year itself to show that season on its own, and tap again to
        return to the accumulated view.</p>
+    <p>Most of what's mapped is unplanned wildfire, shown in the warm orange&ndash;red ramp.
+       About 2% of the burned area, though, is prescribed fire &mdash; deliberately set for
+       fuel reduction or habitat management &mdash; shown in blue instead, on the same
+       fades-with-age ramp.</p>
     <p>The bar under the title is that season's total acres burned, on a common scale &mdash;
        longest is 2020 at 9.2 million acres, shortest 1991 at 0.5 million.</p>
 
@@ -328,28 +335,42 @@ map.on('error', e => console.error('MAP ERROR:', e.error?.message || e));
 // ---------------------------------------------------------------------------
 // Palette — age in years to colour + opacity. Built once from a few anchors; after
 // that it is pure table lookup, so there is no colour maths at animation time.
+// Two ramps, same flare-to-ember shape, different hue: warm for wildfire (the vast
+// majority), cool for prescribed burns (deliberately set, so they read as "controlled"
+// rather than "hot").
 // ---------------------------------------------------------------------------
 const AGES = 41;
-const ANCHORS = [           // [age in years, colour, opacity]
+function buildRamp(anchors) {                // anchors: [age in years, colour, opacity]
+  const COLOR = [], OPACITY = [];
+  for (let a = 0; a < AGES; a++) {
+    let i = 0;
+    while (i < anchors.length - 2 && a > anchors[i + 1][0]) i++;
+    const [x0, c0, o0] = anchors[i], [x1, c1, o1] = anchors[i + 1];
+    const t = Math.min(1, (a - x0) / (x1 - x0));
+    const ch = (from, to) => Math.round(parseInt(from, 16) + (parseInt(to, 16) - parseInt(from, 16)) * t)
+                               .toString(16).padStart(2, '0');
+    COLOR[a] = '#' + ch(c0.slice(1, 3), c1.slice(1, 3)) + ch(c0.slice(3, 5), c1.slice(3, 5))
+                   + ch(c0.slice(5, 7), c1.slice(5, 7));
+    OPACITY[a] = +(o0 + (o1 - o0) * t).toFixed(3);
+  }
+  return { COLOR, OPACITY };
+}
+const { COLOR, OPACITY } = buildRamp([
   [0,  '#fff2b0', 0.95],    // this year — flare
   [1,  '#ff9526', 0.85],
   [3,  '#ff5f1a', 0.75],
   [8,  '#e83c17', 0.66],
   [20, '#b23016', 0.59],
   [40, '#8f2a15', 0.55]     // ember floor — never invisible
-];
-const COLOR = [], OPACITY = [];
-for (let a = 0; a < AGES; a++) {
-  let i = 0;
-  while (i < ANCHORS.length - 2 && a > ANCHORS[i + 1][0]) i++;
-  const [x0, c0, o0] = ANCHORS[i], [x1, c1, o1] = ANCHORS[i + 1];
-  const t = Math.min(1, (a - x0) / (x1 - x0));
-  const ch = (from, to) => Math.round(parseInt(from, 16) + (parseInt(to, 16) - parseInt(from, 16)) * t)
-                             .toString(16).padStart(2, '0');
-  COLOR[a] = '#' + ch(c0.slice(1, 3), c1.slice(1, 3)) + ch(c0.slice(3, 5), c1.slice(3, 5))
-                 + ch(c0.slice(5, 7), c1.slice(5, 7));
-  OPACITY[a] = +(o0 + (o1 - o0) * t).toFixed(3);
-}
+]);
+const { COLOR: RX_COLOR, OPACITY: RX_OPACITY } = buildRamp([
+  [0,  '#dbf7ff', 0.95],    // this year — flare
+  [1,  '#5fc7e8', 0.85],
+  [3,  '#3d9fd1', 0.75],
+  [8,  '#2f78b3', 0.66],
+  [20, '#255a8c', 0.59],
+  [40, '#1c4066', 0.55]     // ember floor — never invisible
+]);
 
 // ---------------------------------------------------------------------------
 // The whole animation state is ONE integer: idx, the index of the year on show.
@@ -357,24 +378,35 @@ for (let a = 0; a < AGES; a++) {
 // are no data-driven expressions, no time quantisation, and no cached-state tracking.
 // N yearly states, and that is the entire state space.
 // ---------------------------------------------------------------------------
-let years = [], layers = [], N = 0, idx = 0, raf = null, fires = [], popup = null;
+let years = [], layers = [], rxLayers = [], N = 0, idx = 0, raf = null, fires = [], popup = null;
 const NOTHING = { type: 'FeatureCollection', features: [] };
 // `pos` is the handle's position as a *fractional* year index. It is presentation only: the map
 // still has exactly N integer states, and `idx` is still the whole of the animation's state.
 // Decoupling the two is what lets the handle glide while the fires step.
 let pos = 0;
 
+// Sets both a year's layers together: `layers[k]` (wildfire and everything else) and
+// `rxLayers[k]` (prescribed fire alone), same age, each on its own ramp.
 function show(i) {
   idx = Math.max(0, Math.min(N - 1, i));
   const single = mode === 'year';
   for (let k = 0; k < N; k++) {
     if (single) {                                    // that season alone, at full flare
-      map.setPaintProperty(layers[k], 'fill-opacity', k === idx ? OPACITY[0] : 0);
-      if (k === idx) map.setPaintProperty(layers[k], 'fill-color', COLOR[0]);
+      const on = k === idx;
+      map.setPaintProperty(layers[k], 'fill-opacity', on ? OPACITY[0] : 0);
+      map.setPaintProperty(rxLayers[k], 'fill-opacity', on ? RX_OPACITY[0] : 0);
+      if (on) {
+        map.setPaintProperty(layers[k], 'fill-color', COLOR[0]);
+        map.setPaintProperty(rxLayers[k], 'fill-color', RX_COLOR[0]);
+      }
     } else {
       const a = Math.min(idx - k, AGES - 1);        // age of year k, in years
       map.setPaintProperty(layers[k], 'fill-opacity', a < 0 ? 0 : OPACITY[a]);
-      if (a >= 0) map.setPaintProperty(layers[k], 'fill-color', COLOR[a]);
+      map.setPaintProperty(rxLayers[k], 'fill-opacity', a < 0 ? 0 : RX_OPACITY[a]);
+      if (a >= 0) {
+        map.setPaintProperty(layers[k], 'fill-color', COLOR[a]);
+        map.setPaintProperty(rxLayers[k], 'fill-color', RX_COLOR[a]);
+      }
     }
   }
   labelHandle();
@@ -543,6 +575,7 @@ function popupPlacement(feature, fallback) {
 }
 
 function wireControls() {
+  const queryLayers = layers.concat(rxLayers);   // both hues are clickable/hoverable alike
   // Dragging anywhere in the rail scrubs. Pointer capture keeps the drag alive when the finger
   // or cursor wanders off the 56px strip, which on a phone it constantly does.
   const r = rail();
@@ -616,7 +649,7 @@ function wireControls() {
   // Pointer cursor over a clickable fire (a point query, not a viewport-wide one — those are
   // costly and nudge MapLibre's render state). Empty string restores the default grab hand.
   map.on('mousemove', e => {
-    const over = map.queryRenderedFeatures(e.point, { layers })
+    const over = map.queryRenderedFeatures(e.point, { layers: queryLayers })
       .some(f => f.properties.year <= years[idx]);
     map.getCanvas().style.cursor = over ? 'pointer' : '';
   });
@@ -626,25 +659,27 @@ function wireControls() {
   map.on('click', e => {
     pause();
     syncURL();                                       // a click parks the year — record it
-    const hits = map.queryRenderedFeatures(e.point, { layers })
+    const hits = map.queryRenderedFeatures(e.point, { layers: queryLayers })
       .filter(f => f.properties.year <= years[idx]);   // ignore years not yet shown
     // Close first: removing a popup fires its close handler, which clears the outline. Doing it
     // before the new one is drawn stops the old handler wiping the new selection.
     closePopup();
     if (!hits.length) return;
     const p = hits[0].properties;
-    // Always three lines: name, date, acreage. Type and assessment are dropped — 87% of these
-    // are "Wildfire" and 62% "Initial", so the words carried almost no information. The one
-    // feature with no acreage still gets a third line, rather than a stray "0 acres".
+    // Always three lines: name, date, acreage. Assessment is dropped — 62% are "Initial" and
+    // the word carries almost no information. Type is dropped too *unless* it's the one worth
+    // knowing: a prescribed burn, already called out by its blue hue, gets a fourth line so the
+    // popup explains what the colour meant instead of leaving it to be inferred.
     const acres = p.acres == null ? 'acreage unknown'
                                   : `${Math.round(p.acres).toLocaleString()} acres`;
+    const rx = p.type === 'Prescribed Fire' ? '<br><span class="rx-tag">Prescribed burn</span>' : '';
     // Stroke the fire being described, from the full original geometry rather than the clipped
     // copy the query returned.
     const feature = fires[p.fid];
     map.getSource('sel').setData(feature ?? NOTHING);
     const { lngLat, anchor } = popupPlacement(feature, e.lngLat);
     popup = new maplibregl.Popup({ anchor, offset: GAP }).setLngLat(lngLat)
-      .setHTML(`<b>${p.name}</b><br>${longDate(p.ig_date)}<br>${acres}`)
+      .setHTML(`<b>${p.name}</b><br>${longDate(p.ig_date)}<br>${acres}${rx}`)
       .addTo(map);
     popup.on('close', () => map.getSource('sel')?.setData(NOTHING));
   });
@@ -688,14 +723,23 @@ Promise.all([loadFires(DS.file), new Promise(res => map.on('load', res))]).then(
   }
 
   map.addSource('fires', { type: 'geojson', data: fc });
-  // One fill layer per year, added oldest-first so newer fires draw on top. The filter is
-  // static; only the constant colour/opacity ever change.
+  // Two fill layers per year, added oldest-first so newer fires draw on top: one for
+  // prescribed fire, one for everything else (wildfire, wildland fire use, other) — split so
+  // each can carry its own constant colour/opacity, rather than a data-driven expression keyed
+  // on type. The filters are static; only the colour/opacity ever change.
+  const isRx = ['==', ['get', 'type'], 'Prescribed Fire'];
   years.forEach((y, k) => {
     layers[k] = 'yr-' + y;
+    rxLayers[k] = 'yr-' + y + '-rx';
     map.addLayer({
       id: layers[k], type: 'fill', source: 'fires',
-      filter: ['==', ['get', 'year'], y],
+      filter: ['all', ['==', ['get', 'year'], y], ['!', isRx]],
       paint: { 'fill-color': COLOR[AGES - 1], 'fill-opacity': 0 }
+    });
+    map.addLayer({
+      id: rxLayers[k], type: 'fill', source: 'fires',
+      filter: ['all', ['==', ['get', 'year'], y], isRx],
+      paint: { 'fill-color': RX_COLOR[AGES - 1], 'fill-opacity': 0 }
     });
   });
 
@@ -711,7 +755,7 @@ Promise.all([loadFires(DS.file), new Promise(res => map.on('load', res))]).then(
 
   peakAcres = Math.max(...acresByYear) || 1;
   wireControls();
-  dlog(`${fc.features.length} fires, ${N} yearly states, ${layers.length} layers`);
+  dlog(`${fc.features.length} fires, ${N} yearly states, ${layers.length + rxLayers.length} layers`);
   const jump = years.indexOf(+q.get('year'));        // ?year=1995 parks there, for sharing/testing
   if (jump >= 0) snapTo(jump);
   else { snapTo(0); play(); }
