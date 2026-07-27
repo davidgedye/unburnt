@@ -319,8 +319,12 @@ function showAbout(open = about.hidden) {
   document.getElementById('title').classList.toggle('open', open);
   infoBtn.setAttribute('aria-expanded', String(open));
 }
+const title = document.getElementById('title');
 infoBtn.addEventListener('click', () => showAbout());
 addEventListener('keydown', e => { if (e.key === 'Escape') showAbout(false); });
+// Any touch/click/drag outside the panel dismisses it — pointerdown fires at the start of a
+// drag, so a map pan closes it without waiting for the drag to finish.
+addEventListener('pointerdown', e => { if (!about.hidden && !title.contains(e.target)) showAbout(false); });
 // MapLibre renders the attribution <details> already open, so it shows as a wide pill. Close it
 // once so it starts as just the (i); clicking/tapping the (i) still toggles it open (see CSS).
 map.on('load', () => document.querySelector('.maplibregl-ctrl-attrib')?.removeAttribute('open'));
