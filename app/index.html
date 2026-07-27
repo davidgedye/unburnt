@@ -24,14 +24,17 @@
        against the 41-year peak. `min-width` (not `width`) is what drives it — the panel itself is
        unsized (shrink-to-fit), so growing this row's floor is what grows the whole panel around
        it. `background-size` fills only that same width with colour; a year's numbers can run on
-       past a short bar onto plain background, which is fine, they still read against --panel. */
+       past a short bar onto plain background, which is fine — the text-shadow keeps them legible
+       either way. Solid `--hot`, the same colour the year handle uses: one orange in the app,
+       not two. */
     #stat {
       position: relative; margin-top: 6px; padding: 4px 8px; border-radius: 4px;
       background-color: rgba(255,255,255,.05);
-      background-image: linear-gradient(90deg, rgba(255,122,26,.45), rgba(255,122,26,.45));
+      background-image: linear-gradient(90deg, var(--hot), var(--hot));
       background-repeat: no-repeat; background-position: left;
       background-size: var(--fill, 0px) 100%;
       font: 600 12px/1.4 ui-monospace, monospace; color: var(--ink); white-space: nowrap;
+      text-shadow: 0 1px 2px rgba(0,0,0,.6);
       transition: min-width .2s ease-out;
     }
     #info-btn {
@@ -143,6 +146,10 @@
        rel="noopener">OpenStreetMap</a> contributors, tiles by
        <a href="https://openfreemap.org/" target="_blank" rel="noopener">OpenFreeMap</a>.
        Rendered with <a href="https://maplibre.org/" target="_blank" rel="noopener">MapLibre GL JS</a>.</p>
+
+    <h4>Credits</h4>
+    <p>Built by David Gedye. Code on
+       <a href="https://github.com/davidgedye/unburnt" target="_blank" rel="noopener">GitHub</a>.</p>
   </div>
 </div>
 
