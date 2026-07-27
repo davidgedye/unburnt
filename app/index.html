@@ -18,9 +18,22 @@
     }
     /* Title (top-left), which also carries the About panel */
     #title { top: 12px; left: 12px; padding: 10px 14px; max-width: 300px; }
-    #title.open { max-width: 340px; }
+    #title.open { max-width: 340px !important; }
     #title b { color: #fff; font-size: 15px; }
-    #title span { color: var(--dim); font-size: 12px; }
+    /* Year stat: the current year's fires/acres, written over a bar whose width tracks acres
+       against the 41-year peak. `min-width` (not `width`) is what drives it — the panel itself is
+       unsized (shrink-to-fit), so growing this row's floor is what grows the whole panel around
+       it. `background-size` fills only that same width with colour; a year's numbers can run on
+       past a short bar onto plain background, which is fine, they still read against --panel. */
+    #stat {
+      position: relative; margin-top: 6px; padding: 4px 8px; border-radius: 4px;
+      background-color: rgba(255,255,255,.05);
+      background-image: linear-gradient(90deg, rgba(255,122,26,.45), rgba(255,122,26,.45));
+      background-repeat: no-repeat; background-position: left;
+      background-size: var(--fill, 0px) 100%;
+      font: 600 12px/1.4 ui-monospace, monospace; color: var(--ink); white-space: nowrap;
+      transition: min-width .2s ease-out;
+    }
     #info-btn {
       float: right; margin: -1px 0 0 10px; width: 22px; height: 22px; border-radius: 50%;
       background: transparent; border: 1px solid rgba(255,255,255,.25); color: var(--ink);
@@ -76,27 +89,6 @@
       background: #150a02; color: var(--hot);
       box-shadow: 0 0 0 2px var(--hot), 0 4px 14px rgba(0,0,0,.55);
     }
-    /* Acres burned per year, hung off the rail: the rail is already a time axis, so each year
-       gets a bar at its own position and the scrubber doubles as a bar chart. Anchored left of
-       the handle so the lozenge never covers a bar. */
-    #spark { position: absolute; right: 76px; top: 0; bottom: 0; pointer-events: none; }
-    #spark .bar {
-      position: absolute; right: 0; height: 3px; border-radius: 2px;
-      background: var(--hot); transform: translateY(50%);
-      opacity: 0; transition: opacity .18s linear;
-    }
-    #spark .bar.on { opacity: .3; }
-    #spark .bar.now { opacity: .95; }
-    /* Each year's totals sit just above its own bar and dim with it. No transform: `bottom` is
-       the label's bottom edge, which puts it above the bar it describes. */
-    #spark .num {
-      position: absolute; right: 0; white-space: nowrap;
-      font: 500 10px/1 ui-monospace, monospace; color: var(--hot);
-      text-shadow: 0 1px 3px rgba(0,0,0,.9);   /* legible where the basemap goes pale */
-      opacity: 0; transition: opacity .18s linear;
-    }
-    #spark .num.on { opacity: .3; }
-    #spark .num.now { opacity: .95; }
     /* MapLibre ships compact attribution but also adds -show, which forces the text open.
        Override that: collapse to just the (i), and reveal on hover or click (<details open>). */
     .maplibregl-ctrl-attrib.maplibregl-compact-show { padding: 2px 24px 2px 0; }
@@ -117,8 +109,8 @@
 
 <div id="title" class="panel">
   <button id="info-btn" aria-label="About this map" aria-expanded="false" aria-controls="about">i</button>
-  <b>Wildfires of the West</b><br>
-  <span id="subtitle">loading…</span>
+  <b>Wildfires of the West</b>
+  <div id="stat">loading…</div>
 
   <div id="about" hidden>
     <p>Every wildfire large enough to enter the federal record across 11 Western states,
@@ -127,7 +119,7 @@
     <p>Drag the year handle on the right to move through time. Click any fire for its name,
        date and size. Tap the year itself to show that season on its own, and tap again to
        return to the accumulated view.</p>
-    <p>The bars beside the year are total acres burned in each season, on a common scale &mdash;
+    <p>The bar under the title is that season's total acres burned, on a common scale &mdash;
        longest is 2020 at 9.2 million acres, shortest 1991 at 0.5 million.</p>
 
     <h4>Fire data</h4>
@@ -148,7 +140,6 @@
 </div>
 
 <div id="rail" role="slider" tabindex="0" aria-label="Year" aria-orientation="vertical">
-  <div id="spark" aria-hidden="true"></div>
   <div id="year">—</div>
 </div>
 
@@ -324,7 +315,9 @@ infoBtn.addEventListener('click', () => showAbout());
 addEventListener('keydown', e => { if (e.key === 'Escape') showAbout(false); });
 // Any touch/click/drag outside the panel dismisses it — pointerdown fires at the start of a
 // drag, so a map pan closes it without waiting for the drag to finish.
-addEventListener('pointerdown', e => { if (!about.hidden && !title.contains(e.target)) showAbout(false); });
+// Capture phase, not bubble: MapLibre's own drag handling stops propagation on the canvas,
+// so a bubble listener here would never see a pointerdown that starts a map pan.
+addEventListener('pointerdown', e => { if (!about.hidden && !title.contains(e.target)) showAbout(false); }, true);
 // MapLibre renders the attribution <details> already open, so it shows as a wide pill. Close it
 // once so it starts as just the (i); clicking/tapping the (i) still toggles it open (see CSS).
 map.on('load', () => document.querySelector('.maplibregl-ctrl-attrib')?.removeAttribute('open'));
@@ -425,7 +418,7 @@ function labelHandle() {
   el.classList.toggle('single', mode === 'year');    // also covers arriving via ?mode=year
   el.classList.toggle('at-min', idx <= 0);           // 1984: only the up arrow
   el.classList.toggle('at-max', N > 0 && idx >= N - 1);   // 2024: only the down arrow
-  paintSpark();
+  updateStat();
   const r = rail();
   r.setAttribute('aria-valuemin', 0);
   r.setAttribute('aria-valuemax', Math.max(0, N - 1));
@@ -433,58 +426,20 @@ function labelHandle() {
   r.setAttribute('aria-valuetext', years[idx] ?? '');
 }
 
-// --- Acres-per-year bars ---------------------------------------------------
-// Built once from the loaded fires; no extra data is fetched. Lengths are recomputed on resize
-// because the bars are sized against viewport width, not a fixed pixel budget.
-let acresByYear = [], firesByYear = [], sparkBars = [], sparkNums = [], sparkDense = false;
-const sparkMax = () => Math.min(110, Math.round(innerWidth * 0.26));
+// --- Year stat --------------------------------------------------------------
+// Fires/acres for the year on show, written in the title panel over a bar sized against the
+// 41-year peak. Always that year's own totals, in both display modes — same numbers whether
+// the map is accumulating or showing that season alone.
+let acresByYear = [], firesByYear = [], peakAcres = 1;
+const stat = document.getElementById('stat');
+const STAT_BAR_MIN = 14, STAT_BAR_MAX = 240;   // px; drives both the fill and the panel's floor
 
-function buildSpark() {
-  const host = document.getElementById('spark');
-  host.innerHTML = '';
-  sparkBars = []; sparkNums = [];
-  years.forEach((y, k) => {
-    const bar = host.appendChild(document.createElement('div'));
-    bar.className = 'bar';
-    const num = host.appendChild(document.createElement('div'));
-    num.className = 'num';
-    num.textContent = `${firesByYear[k].toLocaleString()} fires · `
-                    + `${Math.round(acresByYear[k]).toLocaleString()} acres`;
-    sparkBars.push(bar); sparkNums.push(num);
-  });
-  layoutSpark();
-}
-
-function layoutSpark() {
-  if (!sparkBars.length) return;
-  const { span } = railGeom();
-  const peak = Math.max(...acresByYear) || 1;
-  const L = sparkMax();
-  // Below ~15px between years the labels would collide, so on a short viewport only the current
-  // year keeps its number. The bars themselves are 3px and stay readable far past that.
-  sparkDense = N > 1 && span / (N - 1) < 15;
-  sparkBars.forEach((b, k) => {
-    const at = RAIL_PAD + (N > 1 ? k / (N - 1) : 0) * span;
-    b.style.bottom = at + 'px';
-    b.style.width = Math.max(1, L * acresByYear[k] / peak) + 'px';
-    sparkNums[k].style.bottom = (at + 5) + 'px';
-  });
-}
-
-// Years past the one on show stay dark, so the run still unfolds instead of giving away its
-// ending; parked on 2024 the whole 41-year chart is lit.
-function paintSpark() {
-  if (!sparkBars.length) return;
-  // Single-year mode drops the other bars, so the chart says the same thing the map does: this
-  // season alone. In the accumulated view they return, lit up to the year on show.
-  const single = mode === 'year';
-  sparkBars.forEach((b, k) => {
-    const on = !single && k <= idx, now = k === idx;
-    b.classList.toggle('on', on);
-    b.classList.toggle('now', now);
-    sparkNums[k].classList.toggle('on', on && !sparkDense);
-    sparkNums[k].classList.toggle('now', now);
-  });
+function updateStat() {
+  const acres = acresByYear[idx] || 0, count = firesByYear[idx] || 0;
+  const px = Math.round(STAT_BAR_MIN + (STAT_BAR_MAX - STAT_BAR_MIN) * (acres / peakAcres));
+  stat.style.setProperty('--fill', px + 'px');
+  stat.style.minWidth = px + 'px';
+  stat.textContent = `${count.toLocaleString()} fires · ${Math.round(acres).toLocaleString()} acres`;
 }
 
 function posAtY(clientY) {
@@ -657,7 +612,7 @@ function wireControls() {
   map.on('moveend', e => { if (e.originalEvent) syncURL(); });
 
   // Rail height changes on resize and rotation, so the handle has to be re-placed.
-  addEventListener('resize', () => { moveHandle(pos); layoutSpark(); });
+  addEventListener('resize', () => moveHandle(pos));
   // Pointer cursor over a clickable fire (a point query, not a viewport-wide one — those are
   // costly and nudge MapLibre's render state). Empty string restores the default grab hand.
   map.on('mousemove', e => {
@@ -754,13 +709,7 @@ Promise.all([loadFires(DS.file), new Promise(res => map.on('load', res))]).then(
     paint: { 'line-color': '#fff2b0', 'line-width': 2, 'line-opacity': 0.95 }
   });
 
-  // Only a non-default dataset is named: on the full West the heading already says so, and
-  // repeating it wastes the line. The ?data=wa slice still needs the label to be obvious.
-  const region = DS === DATASETS.west ? '' : `${DS.label} · `;
-  document.getElementById('subtitle').textContent =
-    `${region}${years[0]}–${years[N - 1]} · ${fc.features.length.toLocaleString()} fires · ` +
-    `build ${BUILD}`;
-  buildSpark();
+  peakAcres = Math.max(...acresByYear) || 1;
   wireControls();
   dlog(`${fc.features.length} fires, ${N} yearly states, ${layers.length} layers`);
   const jump = years.indexOf(+q.get('year'));        // ?year=1995 parks there, for sharing/testing
