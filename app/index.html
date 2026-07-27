@@ -70,6 +70,12 @@
     #year::after { bottom: -12px; transform: translateX(-50%) rotate(135deg); }
     /* At either end of the range, drop the arrow that points nowhere. */
     #year.at-min::after, #year.at-max::before { display: none; }
+    /* Single-year mode: the handle inverts, reading as focused rather than flowing. Same size
+       and position, so nothing shifts when it is tapped. */
+    #year.single {
+      background: #150a02; color: var(--hot);
+      box-shadow: 0 0 0 2px var(--hot), 0 4px 14px rgba(0,0,0,.55);
+    }
     /* MapLibre ships compact attribution but also adds -show, which forces the text open.
        Override that: collapse to just the (i), and reveal on hover or click (<details open>). */
     .maplibregl-ctrl-attrib.maplibregl-compact-show { padding: 2px 24px 2px 0; }
@@ -98,7 +104,8 @@
        1984&ndash;2024, played one year at a time. Older burns fade but never vanish, so what
        builds up is the cumulative footprint of four decades of fire.</p>
     <p>Drag the year handle on the right to move through time. Click any fire for its name,
-       date and size.</p>
+       date and size. Tap the year itself to show that season on its own, and tap again to
+       return to the accumulated view.</p>
 
     <h4>Fire data</h4>
     <p><a href="https://www.mtbs.gov/" target="_blank" rel="noopener">MTBS</a> &mdash; Monitoring
@@ -251,6 +258,11 @@ const DATASETS = {
 };
 const DS = DATASETS[q.get('data')] || DATASETS.west;
 const DEBUG = q.has('debug');
+// Display modes, cycled by tapping the year handle. 'all' accumulates every year up to the one
+// on show and fades the older ones; 'year' shows that season alone. Ordered — #8's repeat-burn
+// view slots in here and costs no new interaction.
+const MODES = ['all', 'year'];
+let mode = MODES.includes(q.get('mode')) ? q.get('mode') : 'all';
 const YEAR_MS = 750;                       // one year per 0.75s of screen time
 
 function dlog(...a) { if (DEBUG) console.log(`[${BUILD}]`, ...a); }
@@ -333,12 +345,26 @@ let pos = 0;
 
 function show(i) {
   idx = Math.max(0, Math.min(N - 1, i));
+  const single = mode === 'year';
   for (let k = 0; k < N; k++) {
-    const a = Math.min(idx - k, AGES - 1);          // age of year k, in years
-    map.setPaintProperty(layers[k], 'fill-opacity', a < 0 ? 0 : OPACITY[a]);
-    if (a >= 0) map.setPaintProperty(layers[k], 'fill-color', COLOR[a]);
+    if (single) {                                    // that season alone, at full flare
+      map.setPaintProperty(layers[k], 'fill-opacity', k === idx ? OPACITY[0] : 0);
+      if (k === idx) map.setPaintProperty(layers[k], 'fill-color', COLOR[0]);
+    } else {
+      const a = Math.min(idx - k, AGES - 1);        // age of year k, in years
+      map.setPaintProperty(layers[k], 'fill-opacity', a < 0 ? 0 : OPACITY[a]);
+      if (a >= 0) map.setPaintProperty(layers[k], 'fill-color', COLOR[a]);
+    }
   }
   labelHandle();
+}
+
+function cycleMode() {
+  mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+  closePopup();                                      // it may describe a fire no longer drawn
+  show(idx);
+  syncURL();
+  dlog('mode -> ' + mode);
 }
 
 function snapTo(i) { show(i); moveHandle(i); }      // jump both together
@@ -368,6 +394,7 @@ function moveHandle(p) {
 function labelHandle() {
   const el = document.getElementById('year');
   el.textContent = years[idx] ?? '—';
+  el.classList.toggle('single', mode === 'year');    // also covers arriving via ?mode=year
   el.classList.toggle('at-min', idx <= 0);           // 1984: only the up arrow
   el.classList.toggle('at-max', N > 0 && idx >= N - 1);   // 2024: only the down arrow
   const r = rail();
@@ -437,6 +464,7 @@ function syncURL() {
     // Only a parked year is worth sharing. Mid-run the year is a moving target, and a link
     // carrying one would open on a stopped animation instead of playing.
     if (raf) p.delete('year'); else p.set('year', years[idx]);
+    if (mode === MODES[0]) p.delete('mode'); else p.set('mode', mode);
     history.replaceState(null, '', location.pathname + '?' + p);
   }, 200);
 }
@@ -490,23 +518,43 @@ function wireControls() {
     const yr = Math.round(p);
     if (yr !== idx) show(yr);
   };
+  // A press that starts on the handle might be a tap (cycle the mode) or the start of a drag, and
+  // which one it is is not known until the pointer moves or lets go. So it is held: the year is
+  // not moved until the press travels far enough to be a drag. Pressing the bare rail is
+  // unambiguous and still jumps straight to that year.
+  const TAP_MS = 250, TAP_SLOP = 5;
+  let pending = null;
+  const onHandle = (x, y) => {
+    const b = document.getElementById('year').getBoundingClientRect();
+    return x >= b.left - 6 && x <= b.right + 6 && y >= b.top - 6 && y <= b.bottom + 6;
+  };
   r.addEventListener('pointerdown', e => {
     // A popup describes one year's fire; scrubbing away from that year makes it stale, and it
     // would sit over the map with its outline pointing at nothing.
     closePopup();
-    dragging = true; pause(); r.setPointerCapture(e.pointerId);
-    track(e.clientY); e.preventDefault();
+    pause(); r.setPointerCapture(e.pointerId);
+    if (onHandle(e.clientX, e.clientY)) pending = { t: performance.now(), y: e.clientY };
+    else { dragging = true; track(e.clientY); }
+    e.preventDefault();
   });
-  r.addEventListener('pointermove', e => { if (dragging) track(e.clientY); });
-  const end = e => {
+  r.addEventListener('pointermove', e => {
+    if (pending && Math.abs(e.clientY - pending.y) > TAP_SLOP) { pending = null; dragging = true; }
+    if (dragging) track(e.clientY);
+  });
+  const end = (e, released) => {
+    if (r.hasPointerCapture(e.pointerId)) r.releasePointerCapture(e.pointerId);
+    if (pending) {
+      const wasTap = released && performance.now() - pending.t < TAP_MS;
+      pending = null;
+      if (wasTap) { cycleMode(); return; }            // never travelled, so no year to settle
+    }
     if (!dragging) return;
     dragging = false;
     moveHandle(idx);                                 // settle onto the year it landed on
-    if (r.hasPointerCapture(e.pointerId)) r.releasePointerCapture(e.pointerId);
     syncURL();
   };
-  r.addEventListener('pointerup', end);
-  r.addEventListener('pointercancel', end);
+  r.addEventListener('pointerup', e => end(e, true));
+  r.addEventListener('pointercancel', e => end(e, false));
 
   r.addEventListener('keydown', e => {
     const step = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1,
@@ -514,6 +562,7 @@ function wireControls() {
     if (step) { closePopup(); pause(); snapTo(idx + step); }
     else if (e.key === 'Home') { closePopup(); pause(); snapTo(0); }
     else if (e.key === 'End') { closePopup(); pause(); snapTo(N - 1); }
+    else if (e.key === 'm' || e.key === 'M') { cycleMode(); }   // the tap, for keyboard users
     else return;
     syncURL();
     e.preventDefault();
