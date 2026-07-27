@@ -346,7 +346,11 @@ function play() {
     moveHandle(p);
     const yr = Math.floor(p + 1e-6);
     if (yr !== idx) { show(yr); dlog(`${years[idx]}  (state ${idx + 1}/${N})`); }
-    if (p >= N - 1) { raf = null; show(N - 1); dlog('DONE — final year shown, no further updates'); return; }
+    if (p >= N - 1) {
+      raf = null; show(N - 1); syncURL();            // parked on the final year: now shareable
+      dlog('DONE — final year shown, no further updates');
+      return;
+    }
     raf = requestAnimationFrame(frame);
   };
   raf = requestAnimationFrame(frame);
@@ -365,6 +369,27 @@ function longDate(iso) {
 // Removing the popup fires its close handler, which clears the outline — so this takes down
 // both. Safe to call when nothing is open.
 function closePopup() { if (popup) { popup.remove(); popup = null; } }
+
+// --- Shareable view state --------------------------------------------------
+// The camera and the parked year are mirrored into the query string, so any view can be copied
+// out of the address bar. These are the same parameters the page already reads on load.
+// replaceState rather than pushState: panning and scrubbing should not fill the back button.
+// Existing parameters (data, debug) are preserved rather than rebuilt.
+let urlTimer = null;
+function syncURL() {
+  clearTimeout(urlTimer);
+  urlTimer = setTimeout(() => {
+    const c = map.getCenter();
+    const p = new URLSearchParams(location.search);
+    p.set('lng', c.lng.toFixed(4));                  // ~11 m, enough to land on the same fire
+    p.set('lat', c.lat.toFixed(4));
+    p.set('z', map.getZoom().toFixed(2));
+    // Only a parked year is worth sharing. Mid-run the year is a moving target, and a link
+    // carrying one would open on a stopped animation instead of playing.
+    if (raf) p.delete('year'); else p.set('year', years[idx]);
+    history.replaceState(null, '', location.pathname + '?' + p);
+  }, 200);
+}
 
 // Keep the panel off the burn it describes. The fire's screen bounding box decides which side
 // has room; anchor names are where the *popup's* own edge sits, so 'bottom' puts it above the
@@ -428,6 +453,7 @@ function wireControls() {
     dragging = false;
     moveHandle(idx);                                 // settle onto the year it landed on
     if (r.hasPointerCapture(e.pointerId)) r.releasePointerCapture(e.pointerId);
+    syncURL();
   };
   r.addEventListener('pointerup', end);
   r.addEventListener('pointercancel', end);
@@ -439,8 +465,14 @@ function wireControls() {
     else if (e.key === 'Home') { closePopup(); pause(); snapTo(0); }
     else if (e.key === 'End') { closePopup(); pause(); snapTo(N - 1); }
     else return;
+    syncURL();
     e.preventDefault();
   });
+
+  // Only user-driven movement is recorded. A programmatic move — notably the opening fitBounds
+  // — has no originalEvent, and writing that would pin the camera before anyone had touched it,
+  // costing the fit-to-viewport behaviour on the next load.
+  map.on('moveend', e => { if (e.originalEvent) syncURL(); });
 
   // Rail height changes on resize and rotation, so the handle has to be re-placed.
   addEventListener('resize', () => moveHandle(pos));
@@ -456,6 +488,7 @@ function wireControls() {
   // Panning and zooming work at all times, playing or paused — there is no separate mode.
   map.on('click', e => {
     pause();
+    syncURL();                                       // a click parks the year — record it
     const hits = map.queryRenderedFeatures(e.point, { layers })
       .filter(f => f.properties.year <= years[idx]);   // ignore years not yet shown
     // Close first: removing a popup fires its close handler, which clears the outline. Doing it
