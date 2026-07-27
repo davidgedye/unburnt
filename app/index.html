@@ -7,7 +7,14 @@
   <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
   <link href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" rel="stylesheet">
   <style>
-    :root { --panel: rgba(16,20,27,.86); --ink: #c3ccd6; --dim: #7a8794; --hot: #ff7a1a; }
+    /* --hot is the one accent: the stat bar's fill and the year handle both wear it. A brick
+       red-brown, close to what the stat bar read as back when it was 45%-alpha orange over the
+       panel — bright orange competed with the fires themselves and washed out the pale numbers
+       written across the bar. --hot-lit is the same brick lifted for marks drawn against the dark
+       map rather than filled with it (chevrons, the inverted handle), which the deep tone alone
+       would leave too dim to read. */
+    :root { --panel: rgba(16,20,27,.86); --ink: #c3ccd6; --dim: #7a8794;
+            --hot: #a04a24; --hot-lit: #dd8055; }
     html, body, #map { margin: 0; height: 100%; background: #0a0d12; }
     #map { position: absolute; inset: 0; }
     .panel {
@@ -18,14 +25,21 @@
     }
     /* Title (top-left), which also carries the About panel */
     #title { top: 12px; left: 12px; padding: 10px 14px; max-width: 300px; }
-    #title.open { max-width: 340px !important; }
+    /* Open, the panel may take the whole height between its own top and the bottom margin — a
+       column so the heading holds its size and #about takes whatever is left. dvh, not vh, so
+       mobile browser chrome cannot push the tail of the text under the viewport. */
+    #title.open {
+      max-width: 340px !important; display: flex; flex-direction: column;
+      max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px);
+    }
+    #title.open #head { flex: 0 0 auto; }    /* the heading keeps its height; #about absorbs the rest */
     #title b { color: #fff; font-size: 15px; }
     /* Year stat: the current year's fires/acres, written over a bar whose width tracks acres
        against the 41-year peak. `min-width` (not `width`) is what drives it — the panel itself is
        unsized (shrink-to-fit), so growing this row's floor is what grows the whole panel around
        it. `background-size` fills only that same width with colour; a year's numbers can run on
        past a short bar onto plain background, which is fine — the text-shadow keeps them legible
-       either way. Solid `--hot`, the same colour the year handle uses: one orange in the app,
+       either way. Solid `--hot`, the same colour the year handle uses: one accent in the app,
        not two. */
     #stat {
       position: relative; margin-top: 6px; padding: 4px 8px; border-radius: 4px;
@@ -47,8 +61,19 @@
     #about {
       margin-top: 9px; padding-top: 9px; border-top: 1px solid rgba(255,255,255,.1);
       font-size: 14px; line-height: 1.5; color: var(--dim);
-      max-height: 60vh; overflow-y: auto;      /* long text must not push the panel off-screen */
+      flex: 1 1 auto; min-height: 0;           /* min-height:0 or the flex item refuses to shrink */
+      overflow-y: auto;                        /* longer than the screen scrolls, in place */
+      scrollbar-width: thin;                   /* Firefox; the two rules below cover WebKit */
+      scrollbar-color: rgba(255,255,255,.16) transparent;
     }
+    /* A hairline thumb on no track: enough to say "there is more below" without hanging a grey
+       gutter down the panel. It brightens on hover, so it is still findable as a control. */
+    #about::-webkit-scrollbar { width: 6px; }
+    #about::-webkit-scrollbar-track { background: transparent; }
+    #about::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,.16); border-radius: 3px;
+    }
+    #about:hover::-webkit-scrollbar-thumb { background: rgba(255,255,255,.3); }
     #about p { margin: 0 0 8px; }
     #about h4 { margin: 10px 0 4px; font-size: 12px; letter-spacing: .06em;
       text-transform: uppercase; color: #8fa0b0; font-weight: 600; }
@@ -69,7 +94,7 @@
     #rail:focus-visible #year { box-shadow: 0 0 0 2px #fff, 0 4px 14px rgba(0,0,0,.55); }
     #year {
       position: absolute; right: 12px; bottom: 0; transform: translateY(50%);
-      background: var(--hot); color: #150a02; padding: 9px 13px; border-radius: 999px;
+      background: var(--hot); color: #fff3ec; padding: 9px 13px; border-radius: 999px;
       font: 700 15px/1 ui-monospace, monospace; font-variant-numeric: tabular-nums;
       letter-spacing: .02em; pointer-events: none;   /* the rail owns every pointer event */
       box-shadow: 0 4px 14px rgba(0,0,0,.55);
@@ -79,7 +104,7 @@
        inconsistently across fonts, and this stays crisp at any pixel ratio. */
     #year::before, #year::after {
       content: ''; position: absolute; left: 50%; width: 7px; height: 7px;
-      border: 2px solid var(--hot); border-width: 2px 2px 0 0; opacity: .8;
+      border: 2px solid var(--hot-lit); border-width: 2px 2px 0 0; opacity: .8;
       filter: drop-shadow(0 1px 2px rgba(0,0,0,.7));   /* legible over pale basemap */
     }
     #year::before { top: -12px; transform: translateX(-50%) rotate(-45deg); }
@@ -89,8 +114,8 @@
     /* Single-year mode: the handle inverts, reading as focused rather than flowing. Same size
        and position, so nothing shifts when it is tapped. */
     #year.single {
-      background: #150a02; color: var(--hot);
-      box-shadow: 0 0 0 2px var(--hot), 0 4px 14px rgba(0,0,0,.55);
+      background: #150a02; color: var(--hot-lit);
+      box-shadow: 0 0 0 2px var(--hot-lit), 0 4px 14px rgba(0,0,0,.55);
     }
     /* MapLibre ships compact attribution but also adds -show, which forces the text open.
        Override that: collapse to just the (i), and reveal on hover or click (<details open>). */
@@ -114,9 +139,13 @@
 <div id="map"></div>
 
 <div id="title" class="panel">
-  <button id="info-btn" aria-label="About this map" aria-expanded="false" aria-controls="about">i</button>
-  <b>Wildfires of the West</b>
-  <div id="stat">loading…</div>
+  <!-- Title and stat in one block, so the open panel's flex column sees a heading and a body
+       rather than blockifying the button out of its float. -->
+  <div id="head">
+    <button id="info-btn" aria-label="About this map" aria-expanded="false" aria-controls="about">i</button>
+    <b>Wildfires of the West</b>
+    <div id="stat">loading…</div>
+  </div>
 
   <div id="about" hidden>
     <p>Every wildfire large enough to enter the federal record across 11 Western states,
