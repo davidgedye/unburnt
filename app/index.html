@@ -244,6 +244,9 @@
     /* The fires a track crosses, in the track's own mint, so the popup ties back to the line
        the click came from the same way the prescribed-fire tag does. */
     .trk-tag { color: var(--trk); font-weight: 600; }
+    /* The severity breakdown, and the plain admission when there isn't one. */
+    .sev-tag { color: #e0a05a; font-weight: 600; }
+    .sev-none { color: var(--dim); font-style: italic; }
   </style>
 </head>
 <body>
@@ -306,6 +309,19 @@
     <p>The last two or three stops describe so little ground that it is smaller than a pixel
        on a map of the whole West &mdash; the acreage beside the title is the honest measure
        of them. Zoom in and they are there.</p>
+
+    <h4>How hard it burned</h4>
+    <p>A perimeter says a fire reached here; it doesn't say what it did. In <b>One year</b>,
+       fires whose burn severity has been mapped carry a faint outline &mdash; click one and
+       the fire is repainted by severity: cool slate where the ground barely burned, through
+       amber and orange to deep red where the canopy went. The popup gives the split.</p>
+    <p>Severity is 30&nbsp;m detail about a single fire, so it is offered where it can actually
+       be read &mdash; one fire, close up &mdash; rather than as a layer over the whole West,
+       and each fire's data is only fetched when you ask for it.</p>
+    <p>Not every fire has it. MTBS assesses severity a season or two behind the perimeters, so
+       recent fires often have none yet, and a fire that says <i>severity not yet mapped</i>
+       genuinely has none rather than having failed to load. The percentages are shares of the
+       area MTBS actually assessed.</p>
 
     <h4>Your own tracks</h4>
     <p>Drag a GPX file anywhere onto the map, or use <b>+ Add a GPX track</b> under the title,
@@ -618,6 +634,7 @@ let years = [], layers = [], rxLayers = [], N = 0, idx = 0, raf = null, fires = 
 // level apart is what lets the rail carry one of them without destroying the other, so leaving
 // repeat mode puts you back on the year you left.
 let repLayers = [], repRings = [], repeats = [], levels = [2], lvl = 0, acresFrom = [];
+let sevLayers = [];                        // per-year outline marking fires that have severity
 // ?level=4 opens on that level. It names a count, not an index — indexes shift between the
 // two datasets — so it can only be resolved once the data says which counts exist.
 const wantLevel = +q.get('level') || 0;
@@ -635,6 +652,7 @@ const railIdx = () => mode === 'repeat' ? lvl : idx;
 
 // Move the year. Repaints, since the year is one of the two things a repaint reads.
 function show(i) {
+  if (i !== idx) clearSeverity();      // the overlay belongs to a fire in the year we're leaving
   idx = Math.max(0, Math.min(N - 1, i));
   paint();
 }
@@ -678,6 +696,11 @@ function paint() {
       }
     }
   }
+  // The severity outline belongs to one-year mode alone; the per-year filters mean only the
+  // year on show is ever lit, so this is one opacity per year like everything else.
+  for (let k = 0; k < N; k++) {
+    map.setPaintProperty(sevLayers[k], 'line-opacity', single && k === idx ? 0.55 : 0);
+  }
   // One uniform per count, whatever the year — the repeat layers are one state, not N. The
   // rail sets a *floor*, not a slice: at level 5 you see everything that burned five times or
   // more, so the picture stays graded instead of collapsing to a single shade, and pushing the
@@ -711,6 +734,7 @@ function setMode(m) {
   // (pause() also picks up the repeat asset and any unmeasured tracks, first time through)
   if (m === mode) return;                            // nothing else to do; it is already on show
   mode = m;
+  clearSeverity();                     // it only ever made sense in the view being left
   closePopup();                                      // it may describe a fire no longer drawn
   paint();
   moveHandle(railIdx());     // the rail just changed axis; re-place the handle on the new one
@@ -842,6 +866,53 @@ function longDate(iso) {
 // both. Safe to call when nothing is open.
 function closePopup() { if (popup) { popup.remove(); popup = null; } }
 
+// --- Severity overlay -------------------------------------------------------
+// Clearing is separate from closePopup(): the popup can go without the overlay going (a click
+// on empty ground closes both), but the overlay must never outlive the year or the view it
+// belongs to.
+function clearSeverity() {
+  if (!sevShown) return;
+  sevShown = null;
+  map.getSource(SEV_SRC)?.setData(NOTHING);
+  map.setPaintProperty('sel-unmapped', 'fill-opacity', 0);
+  for (const s of SEV) map.setPaintProperty(s.id, 'fill-opacity', 0);
+}
+
+// One small gzipped GeoJSON per fire, fetched the first time that fire is asked for and kept
+// after — a second click on the same burn costs nothing. A fire whose file is missing is
+// treated as a fire with no severity rather than an error: the build simply had nothing to
+// write for it, which is the ordinary case for the newest season.
+async function showSeverity(id) {
+  sevShown = id;
+  let fc = sevCache.get(id);
+  if (!fc) {
+    try {
+      fc = await loadGz(`data/severity/${encodeURIComponent(id)}.geojson.gz`);
+    } catch (err) {
+      dlog(`no severity overlay for ${id}: ${err.message}`);
+      fc = NOTHING;
+    }
+    sevCache.set(id, fc);
+  }
+  if (sevShown !== id) return;                     // something else was clicked while fetching
+  map.getSource(SEV_SRC).setData(fc);
+  map.setPaintProperty('sel-unmapped', 'fill-opacity', 0.92);
+  for (const s of SEV) map.setPaintProperty(s.id, 'fill-opacity', s.op);
+  dlog(`severity ${id}: ${fc.features.length} polygons`);
+}
+
+// The class breakdown, biggest share first, for the popup. `sev` rides on the fire itself, so
+// this needs no fetch and is right even before the overlay lands.
+function severityLine(sev) {
+  if (!Array.isArray(sev)) return '';
+  const parts = SEV.map((s, i) => ({ pct: sev[i] || 0, label: s.label }))
+    .filter(p => p.pct >= 1)
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, 3)
+    .map(p => `${p.pct}% ${p.label}`);
+  return parts.length ? `<br><span class="sev-tag">${parts.join(' &middot; ')}</span>` : '';
+}
+
 // Track names and fire names both end up inside a popup's HTML, and a track name came out of
 // a file someone else may have written.
 const esc = s => String(s).replace(/[&<>"]/g, c =>
@@ -873,6 +944,34 @@ function showTrackPopup(feature, lngLat) {
 // the "no runtime geometry" rule, which is about the animation's per-frame paint: this runs
 // once, when a file is dropped, in the same class as the initial data load.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Burn severity (#14) — how hard a single fire burned, where.
+//
+// Not a mode and not a checkbox, which is what the issue asked about. Severity is 30 m detail
+// on one fire: at a whole-West zoom it is noise, and a map-wide toggle would offer it exactly
+// where it cannot be read. So it rides on the interaction that already means "this one fire,
+// close up" — one-year mode plus a click — and each fire's overlay is fetched only then.
+//
+// Which fires have it is known at build time and carried on the fire itself, so fires that
+// have severity wear a thin outline in one-year mode. Nobody has to click and hope, and it
+// works without a hover state, which a phone does not have.
+//
+// The ramp substitutes for the fire's own fill rather than adding a fourth hue to the app:
+// cool slate for ground that barely burned, through amber and orange to deep red. Green is
+// kept out of it — mint already means "your GPX track" — except for the rare class 5, which is
+// literally "greener afterwards than before" and gets a teal that no line is ever drawn in.
+// ---------------------------------------------------------------------------
+const SEV_SRC = 'severity';
+const SEV = [
+  { c: 1, id: 'sev-1', color: '#4a5a6b', op: 0.80, label: 'unburned to low' },
+  { c: 2, id: 'sev-2', color: '#b98a3e', op: 0.85, label: 'low' },
+  { c: 3, id: 'sev-3', color: '#e0662a', op: 0.88, label: 'moderate' },
+  { c: 4, id: 'sev-4', color: '#c62020', op: 0.92, label: 'high' },
+  { c: 5, id: 'sev-5', color: '#4f9d8a', op: 0.85, label: 'increased greenness' }
+];
+let sevShown = null;                     // the fire id whose overlay is on the map, if any
+const sevCache = new Map();              // id -> FeatureCollection, so a re-click is instant
+
 const TRACK_SRC = 'tracks', TRACK_LAYER = 'track-line', TRACK_CASE = 'track-case';
 const STORE_KEY = 'unburnt.tracks.v1';
 const MI_PER_DEG = 69.0525;                  // latitude degrees to statute miles
@@ -1366,7 +1465,7 @@ function wireControls() {
     // Close first: removing a popup fires its close handler, which clears the outline. Doing it
     // before the new one is drawn stops the old handler wiping the new selection.
     closePopup();
-    if (!hits.length) return;
+    if (!hits.length) { clearSeverity(); return; }
     const p = hits[0].properties;
     // On the timeline, always three lines: name, date, acreage. Assessment is dropped — 62% are
     // "Initial" and the word carries almost no information. Type is dropped too *unless* it's
@@ -1381,7 +1480,18 @@ function wireControls() {
       const acres = p.acres == null ? 'acreage unknown'
                                     : `${Math.round(p.acres).toLocaleString()} acres`;
       const rx = p.type === 'Prescribed Fire' ? '<br><span class="rx-tag">Prescribed burn</span>' : '';
-      html = `<b>${p.name}</b><br>${longDate(p.ig_date)}<br>${acres}${rx}`;
+      // Severity is only offered where the view can show it — one fire, close up. Where it is
+      // missing, say so rather than showing nothing and leaving it ambiguous whether the data
+      // is absent or the fetch failed; same honest-absence habit as "acreage unknown".
+      let sev = '';
+      if (mode === 'year') {
+        const list = typeof p.sev === 'string' ? JSON.parse(p.sev) : p.sev;
+        sev = p.sev_ok ? severityLine(list)
+                       : '<br><span class="sev-none">severity not yet mapped</span>';
+      }
+      html = `<b>${p.name}</b><br>${longDate(p.ig_date)}<br>${acres}${rx}${sev}`;
+      clearSeverity();
+      if (mode === 'year' && p.sev_ok) showSeverity(p.id);
     }
     // Stroke the shape being described, from the full original geometry rather than the clipped
     // copy the query returned.
@@ -1391,7 +1501,7 @@ function wireControls() {
     popup = new maplibregl.Popup({ anchor, offset: GAP }).setLngLat(lngLat)
       .setHTML(html)
       .addTo(map);
-    popup.on('close', () => map.getSource('sel')?.setData(NOTHING));
+    popup.on('close', () => { map.getSource('sel')?.setData(NOTHING); clearSeverity(); });
   });
 }
 
@@ -1488,6 +1598,20 @@ Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([f
     });
   });
 
+  // A thin outline on the fires that have severity data, one static layer per year so the
+  // filter never changes — same mechanism as the year fills themselves, and paint-only. Lit
+  // only in one-year mode, where a click is about a single fire; in the accumulated view it
+  // would outline thousands of burns at once and say nothing.
+  years.forEach((y, k) => {
+    sevLayers[k] = 'yr-' + y + '-sev';
+    map.addLayer({
+      id: sevLayers[k], type: 'line', source: 'fires',
+      filter: ['all', ['==', ['get', 'year'], y], ['==', ['get', 'sev_ok'], true]],
+      paint: { 'line-color': '#ffe9c4', 'line-opacity': 0,
+               'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.8, 9, 1.4, 14, 2] }
+    });
+  });
+
   // Repeat-burn counts — one fill per count, over every year layer, so the reburns sit on top
   // of the footprint they came out of. All eight are created whatever the dataset holds (WA
   // tops out at 5×); an unused one simply matches nothing. The source starts empty and is
@@ -1529,6 +1653,16 @@ Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([f
   // queryRenderedFeatures is clipped at tile edges, which would stroke only part of a big burn.
   // Added last, so it sits above every year layer.
   map.addSource('sel', { type: 'geojson', data: NOTHING });
+  // Ground under a severity overlay that MTBS did not map. Without it the fire's own flare
+  // fill shows through wherever a severity polygon pulled back from the perimeter under
+  // simplification, and a band of pale yellow around the edge reads as a severity class of its
+  // own. This paints the clicked fire out first, so absence looks like absence. It rides on
+  // the `sel` source, which already holds exactly that one fire's full geometry — no filter
+  // change, so no relayout.
+  map.addLayer({
+    id: 'sel-unmapped', type: 'fill', source: 'sel',
+    paint: { 'fill-color': '#141922', 'fill-opacity': 0 }
+  });
   map.addLayer({
     id: 'sel-line', type: 'line', source: 'sel',
     paint: { 'line-color': '#fff2b0', 'line-width': 2, 'line-opacity': 0.95 }
@@ -1538,6 +1672,17 @@ Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([f
   // is showing should ever hide the line you brought to it. Two layers: a dark casing under a
   // mint line, the usual way of keeping a route legible whatever it crosses, and here it has
   // to survive both the near-black ground and the brightest part of the fire ramp.
+  // The severity overlay for whichever fire is being looked at. One fill per class, constant
+  // colour, opacity toggled — no data-driven paint, like everything else here.
+  map.addSource(SEV_SRC, { type: 'geojson', data: NOTHING });
+  for (const s of SEV) {
+    map.addLayer({
+      id: s.id, type: 'fill', source: SEV_SRC,
+      filter: ['==', ['get', 'sev'], s.c],
+      paint: { 'fill-color': s.color, 'fill-opacity': 0 }
+    });
+  }
+
   map.addSource(TRACK_SRC, { type: 'geojson', data: NOTHING });
   map.addLayer({
     id: TRACK_CASE, type: 'line', source: TRACK_SRC,

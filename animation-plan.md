@@ -418,6 +418,57 @@ Two caveats it inherits from the perimeter data, both stated in the About panel:
 simplified to ~200 m, and "burned" means "inside a mapped perimeter", which the severity mosaics
 put at about 84% actually burned.
 
+## Burn severity — ✅ built (#14)
+
+**Neither a mode nor a checkbox**, which is what the issue asked. Severity is 30 m detail about
+one fire: at a whole-West zoom it is noise, and a map-wide toggle would offer it exactly where
+it cannot be read. So it rides on the interaction that already means "this one fire, close up" —
+**One year** plus a click — and each fire's overlay is fetched only then.
+
+**Discoverability is the part that had to work.** Which fires have severity is known at build
+time and carried on the fire (`sev_ok`), so in One year those fires wear a faint outline: one
+static line layer per year, filtered on `year` *and* `sev_ok`, opacity-toggled like everything
+else. Nobody clicks and hopes, and it needs no hover state, which a phone does not have.
+
+**Source: the annual CONUS mosaics, not per-fire rasters** — a deliberate departure from the
+plan, because MTBS's per-fire rasters are not publicly scriptable: the old
+`edcintl .../individual_fire_data/` tree 404s, directory listings are 403, the mtbs.gov ETD API
+is a mapping-status tracker carrying no rasters, and a ScienceBase search finds no per-fire
+product. The 41 annual mosaics are confirmed complete (ScienceBase `5e91dee782ce172707f02cdd`,
+no gaps). The cost is the documented ~2-year lag, and it lands exactly where the plan predicted:
+
+| | fires | with severity |
+|---|---|---|
+| 1984–2023 | 11,078 | 10,418 (94%) |
+| 2024 | 299 | 87 (29%) |
+| **all** | **11,377** | **10,505 (92%)** |
+
+That is not hidden — it is what `sev_ok` is for. A 2024 megafire like PARK says *severity not yet
+mapped* rather than showing nothing, the same honest-absence habit as `acreage unknown`.
+
+**Pipeline** (`build-severity.py`, then `thin-severity.py`, then `build-fires.sh`): per fire,
+window-read that fire's bbox out of the year's mosaic — a few ms, versus clipping a
+137k × 89k raster — mask to the perimeter so a neighbour's pixels don't count, sieve,
+polygonize by class, reproject, simplify, gzip. `fetch-mosaics.sh` pulls each year, builds it
+and deletes the mosaic; 41 of them at once would be 8 GB of scratch for no reason.
+
+**Two size decisions, both measured.** A fixed sieve threshold put the 41-year build at ~104 MB.
+The sieve now **scales with the fire**, because every fire is viewed zoomed to fit, so what
+matters is detail per screenful, not acres per speck — a megafire getting a hundred times the
+polygons of a small burn is both unreadable and where all the bytes go. Then a vector pass
+thins to a budget, working on the GeoJSON rather than the rasters so a different budget costs
+seconds instead of re-downloading 200 MB. Landed at **20.6 MB over 10,505 files**, median 1.1 KB.
+
+**The artifact that cost a redesign:** simplification pulls each severity polygon back from the
+perimeter, and the fire's own flare fill showed through the gap as a pale band that read as a
+severity class of its own. Fixed by painting the clicked fire out first in a neutral dark, on
+the `sel` source that already holds its full geometry — no filter change, no relayout — so
+unmapped ground looks unmapped.
+
+**Colour substitutes rather than adds:** cool slate → amber → orange → deep red replaces the
+fire's own fill for that one fire. Green is kept out (mint means "your GPX track") except the
+rare class 5, literally "greener afterwards", which gets a teal nothing else uses.
+
 ## Data caveats (still true)
 
 - **Provisional tail (mosaic lag ~2 yr):** severity mosaics are complete only through ~2023;
@@ -451,4 +502,6 @@ put at about 84% actually burned.
    touch-friendly close target.
 9. ~~**GPX tracks**~~ ✅ (#11) drop your own route on the fire record; parsed and kept entirely
    in the browser, so the answer to "server state and per-user data" is that there is none.
-10. **Pick the new name.**
+10. ~~**Severity layer**~~ ✅ (#14) per-fire overlays on One year + click, 92% coverage, with
+    the outline marking which fires have data. Milestone 7's PMTiles move is still open.
+11. **Pick the new name.**

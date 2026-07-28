@@ -47,6 +47,12 @@ Working app covering **all 11 Western states, 1984–2024** — see `app/`:
   and stays there, remembered only by that browser's `localStorage`. This is what keeps the app
   a static asset deploy with no Worker script, no database and no accounts (#11).
 
+- **Burn severity** — in *One year*, fires whose severity MTBS has mapped carry a faint
+  outline; click one and it is repainted by severity (slate → amber → orange → red), with the
+  class split in the popup. **10,505 of 11,377 fires (92%)** have it; 2024 is mostly unmapped
+  because MTBS assesses a season or two behind, which the outline makes visible rather than
+  something you discover by clicking. 20.6 MB across per-fire files, fetched one at a time.
+
 Run it locally: `npm run dev` (or `python3 serve.py`) → `http://localhost:8090/index.html`
 (URL params: `?data=west|wa`, `?lng=&lat=&z=`, `?year=1995`, `?mode=year|repeat`, `?level=4`,
 `?debug=1`).
