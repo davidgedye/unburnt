@@ -34,6 +34,16 @@ WEST="'WA','OR','CA','ID','NV','UT','AZ','MT','WY','CO','NM'"
 
 log() { printf '%s  %s\n' "$(date +%H:%M:%S)" "$*"; }
 
+# Only one build at a time. Every year reuses the same scratch names in $WORK, so two runs
+# silently overwrite each other's p.geojson / s.pmtiles and produce year tilesets containing
+# another year's data — structurally valid, contentally wrong, and only findable by decoding a
+# tile. That happened; this is the fix. flock releases on exit however the script dies.
+exec 9>"$OUT/.build.lock"
+if ! flock -n 9; then
+  echo "another build is already running (holding $OUT/.build.lock) — refusing to start" >&2
+  exit 1
+fi
+
 build_year() {
   local y="$1"
   if [ -f "$YEARS/$y.pmtiles" ]; then
@@ -51,7 +61,12 @@ build_year() {
     mkdir -p "$dir"
     log "$y  downloading mosaic"
     curl -sSL --max-time 1800 --retry 3 -o "$dir/m.zip" "$url" || { log "$y  download FAILED"; return 1; }
-    unzip -o -q -j "$dir/m.zip" -d "$dir" && rm -f "$dir/m.zip"
+    if ! unzip -o -q -j "$dir/m.zip" -d "$dir"; then
+      # A truncated or corrupt download inflates part-way and leaves a plausible .tif behind.
+      log "$y  unzip FAILED (corrupt download) — discarding"
+      rm -rf "$dir"; return 1
+    fi
+    rm -f "$dir/m.zip"
     [ -f "$tif" ] || { log "$y  no CONUS tif after unzip"; return 1; }
     downloaded=1
   fi
@@ -90,7 +105,9 @@ build_year() {
   tippecanoe -q -o "$WORK/p.pmtiles" -Z2 -z13 --no-tile-size-limit \
     --detect-shared-borders --named-layer=perimeters:"$WORK/p.geojson" \
     || { log "$y  tippecanoe perimeters FAILED"; return 1; }
-  if [ -s "$WORK/s.geojson" ] && [ "$(python3 -c "import json;print(len(json.load(open('$WORK/s.geojson'))['features']))")" != "0" ]; then
+  # A cheap emptiness test. The previous version parsed the entire severity GeoJSON — up to
+  # 372 MB — purely to count its features, which is slow and throws on a partial file.
+  if [ -s "$WORK/s.geojson" ] && ! grep -q '"features":\[\]' "$WORK/s.geojson"; then
     tippecanoe -q -o "$WORK/s.pmtiles" -Z9 -z13 \
       --detect-shared-borders --coalesce-densest-as-needed \
       --named-layer=severity:"$WORK/s.geojson" \
