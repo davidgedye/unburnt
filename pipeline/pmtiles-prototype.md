@@ -161,6 +161,48 @@ renamed only on success, and a kill loses at most the year in flight.
 Measured on 2024 (89 of 299 fires have severity) and 2023 (259 of 272): **~60 s per year** with
 the mosaic already local, 14–16 MB per year tileset.
 
+## The full build, run 2026-07-28
+
+`pipeline/build-pmtiles-all.sh` — **39 of 41 years, 927 MB, 91,883 tiles, z2–z13.** Verified by
+decoding tiles, not just reading headers: all 39 years present, both layers intact, severity
+classes 1–5 and `sev_ok` surviving the merge. Rendered through `serve.py` by byte range:
+
+| view | features | requests | transferred |
+|---|---|---|---|
+| z4.2, whole West | 10,837 perimeters across 39 years | 6 | 785 KB |
+| z13, DOLAN's coastal edge | 13 perimeters, 315 severity polygons | 8 | **67 KB** |
+
+Against the 3.15 MB the app parses up front today — still less traffic for the whole-West view,
+and vastly more detail close up.
+
+### 2004 and 2017 are missing, and it is not our fault
+
+Both fail to download. ScienceBase's item metadata advertises `mtbs_CONUS_2004.zip` at
+2,977,514 bytes, but the file link returns a 404 HTML page, and pulling the whole item as a zip
+shows why: **the stored object is 0 bytes**. Same for 2017. Other years download fine from the
+same host in the same session, so it is not rate limiting, and the legacy `edcintl` mosaic paths
+are gone (404). Retry later, or find another mirror — 2017 matters, it is the 4th biggest fire
+year in the record.
+
+The build script now catches this at download time (`curl --fail`, plus a minimum-size check)
+and says so plainly, rather than saving a 404 page as a `.zip` and failing later at inflate.
+
+### What the run cost
+
+Roughly 1 hour of wall clock for 41 years including downloads, ~1.3 GB peak RAM, disk never
+below 215 GB free. The estimate of 1.5–2.5 h was pessimistic.
+
+### Two process failures worth recording
+
+1. **Two builds ran concurrently.** Earlier launches that appeared to fail had not, and both
+   wrote to the same scratch names in `work/`. The result was year tilesets containing *another
+   year's* data — structurally valid, so `pmtiles show` passed them, and only decoding tiles
+   found 1993 holding 1992 and 2019 holding 2020. The script now takes an `flock` and refuses
+   to start twice; verified.
+2. **Never trust a header for a content question.** `pmtiles show` reported 30 of 30 tilesets
+   healthy while two of them held the wrong year. Content verification is now part of the
+   routine: decode z4 and check the `year` property against the filename.
+
 ## Migration notes
 
 - The animation engine survives unchanged: one layer per year with a **static** filter works the

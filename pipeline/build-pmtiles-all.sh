@@ -60,7 +60,17 @@ build_year() {
     [ -z "$url" ] && { log "$y  no mosaic URL — skipped"; return 1; }
     mkdir -p "$dir"
     log "$y  downloading mosaic"
-    curl -sSL --max-time 1800 --retry 3 -o "$dir/m.zip" "$url" || { log "$y  download FAILED"; return 1; }
+    # --fail so an HTTP error is caught here rather than saved as a .zip and discovered at
+    # unzip time. ScienceBase serves a 404 HTML page with a 200-shaped body otherwise.
+    if ! curl -sSL --fail --max-time 1800 --retry 3 -o "$dir/m.zip" "$url"; then
+      log "$y  download FAILED (HTTP error)"; rm -rf "$dir"; return 1
+    fi
+    # A zero-byte or absurdly small archive means ScienceBase has the file registered but empty
+    # — which is genuinely the case for some years. Catch it here with a clear reason.
+    if [ "$(stat -c%s "$dir/m.zip")" -lt 100000 ]; then
+      log "$y  download FAILED (archive is $(stat -c%s "$dir/m.zip") bytes — upstream file is empty)"
+      rm -rf "$dir"; return 1
+    fi
     if ! unzip -o -q -j "$dir/m.zip" -d "$dir"; then
       # A truncated or corrupt download inflates part-way and leaves a plausible .tif behind.
       log "$y  unzip FAILED (corrupt download) — discarding"
