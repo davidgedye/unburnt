@@ -27,10 +27,12 @@
     #title { top: 12px; left: 12px; padding: 10px 14px; max-width: 300px; }
     /* Open, the panel may take the whole height between its own top and the bottom margin — a
        column so the heading holds its size and #about takes whatever is left. dvh, not vh, so
-       mobile browser chrome cannot push the tail of the text under the viewport. */
+       mobile browser chrome cannot push the tail of the text under the viewport. z-index above
+       #rail's, or the year handle (z-index 3) draws over the open panel instead of under it. */
     #title.open {
       max-width: 340px !important; display: flex; flex-direction: column;
       max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px);
+      z-index: 4;
     }
     #title.open #head { flex: 0 0 auto; }    /* the heading keeps its height; #about absorbs the rest */
     #title b { color: #fff; font-size: 15px; }
