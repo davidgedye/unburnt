@@ -193,8 +193,8 @@
     .maplibregl-popup-tip { border-top-color: #12161d !important;
       border-bottom-color: #12161d !important; }
     /* Same mid-tone as the prescribed-fire map ramp, so the popup's callout ties back to the
-       blue fill the click came from. */
-    .rx-tag { color: #5fc7e8; font-weight: 600; }
+       purple fill the click came from. */
+    .rx-tag { color: #b87fe0; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -226,7 +226,7 @@
        below. Tapping the handle itself cycles the same three, if that is closer to hand.</p>
     <p>Most of what's mapped is unplanned wildfire, shown in the warm orange&ndash;red ramp.
        About 2% of the burned area, though, is prescribed fire &mdash; deliberately set for
-       fuel reduction or habitat management &mdash; shown in blue instead, on the same
+       fuel reduction or habitat management &mdash; shown in purple instead, on the same
        fades-with-age ramp.</p>
     <p>The bar under the title is that season's total acres burned, on a common scale &mdash;
        longest is 2020 at 9.2 million acres, shortest 1991 at 0.5 million.</p>
@@ -467,8 +467,9 @@ map.on('error', e => console.error('MAP ERROR:', e.error?.message || e));
 // Palette — age in years to colour + opacity. Built once from a few anchors; after
 // that it is pure table lookup, so there is no colour maths at animation time.
 // Two ramps, same flare-to-ember shape, different hue: warm for wildfire (the vast
-// majority), cool for prescribed burns (deliberately set, so they read as "controlled"
-// rather than "hot").
+// majority), purple for prescribed burns (deliberately set, so they read as "controlled"
+// rather than "hot") — chosen to sit clearly apart from both the wildfire ramp and the
+// basemap's own blues and greens (water, forest, park).
 // ---------------------------------------------------------------------------
 const AGES = 41;
 function buildRamp(anchors) {                // anchors: [age in years, colour, opacity]
@@ -495,12 +496,12 @@ const { COLOR, OPACITY } = buildRamp([
   [40, '#8f2a15', 0.55]     // ember floor — never invisible
 ]);
 const { COLOR: RX_COLOR, OPACITY: RX_OPACITY } = buildRamp([
-  [0,  '#dbf7ff', 0.95],    // this year — flare
-  [1,  '#5fc7e8', 0.85],
-  [3,  '#3d9fd1', 0.75],
-  [8,  '#2f78b3', 0.66],
-  [20, '#255a8c', 0.59],
-  [40, '#1c4066', 0.55]     // ember floor — never invisible
+  [0,  '#f0dcff', 0.95],    // this year — flare
+  [1,  '#b87fe0', 0.85],
+  [3,  '#9c5cd1', 0.75],
+  [8,  '#7c3fb0', 0.66],
+  [20, '#5f2f8c', 0.59],
+  [40, '#3f1f5c', 0.55]     // ember floor — never invisible
 ]);
 
 // ---------------------------------------------------------------------------
@@ -581,7 +582,7 @@ function paint() {
   for (let k = 0; k < N; k++) {
     if (rep) {
       // Every year flattened to one dim ember: the question here is how often, not when or
-      // by whom, so age stops mattering and prescribed fire gives up its blue.
+      // by whom, so age stops mattering and prescribed fire gives up its purple.
       for (const id of [layers[k], rxLayers[k]]) {
         map.setPaintProperty(id, 'fill-color', REPEAT_BASE);
         map.setPaintProperty(id, 'fill-opacity', REPEAT_BASE_OP);
@@ -926,7 +927,7 @@ function wireControls() {
     const p = hits[0].properties;
     // On the timeline, always three lines: name, date, acreage. Assessment is dropped — 62% are
     // "Initial" and the word carries almost no information. Type is dropped too *unless* it's
-    // the one worth knowing: a prescribed burn, already called out by its blue hue, gets a
+    // the one worth knowing: a prescribed burn, already called out by its purple hue, gets a
     // fourth line so the popup explains what the colour meant instead of leaving it to be
     // inferred. A repeat patch has no name and no date — only its count, which is the whole
     // point of the view, so that is all it says.
