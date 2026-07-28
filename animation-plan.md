@@ -341,6 +341,28 @@ Only the counts are stored, not *which* years overlapped; that needs true polygo
 (shapely/PostGIS) and a much heavier job. Build it only if the popup ever needs to say more
 than "burned 9 times".
 
+### Verifying the counts — `pipeline/verify-repeats.py`
+
+The counts are checked against the source by a method that shares no code with the build:
+exact point-in-polygon against the 11,377 MTBS perimeters. Run 2026-07-27, 800 samples per test:
+
+| Test | Result |
+|---|---|
+| **A.** Points inside shipped patches — does `count` match the perimeters actually covering them? | 97.2% overall; **100%** (581/581) for every point more than 130 m from a patch edge |
+| **B.** Points anywhere in the burned footprint — is any reburn *missing*? | 97.8% overall; **100%** (260/260) more than 500 m from any patch |
+| **C.** Conservation: Σ count × cell area vs. the summed area of all 11,377 perimeters | 120,451,471 vs. 120,749,138 acres, **−0.247%** |
+
+Every one of the 40 disagreements is attributed to a known lossy step — 19 simplification,
+12 rasterisation (pixel-centre rule), 9 sieve — with **none unexplained**. All of them sit within
+a patch boundary's ~130 m ambiguity zone, which is what the 90 m grid plus 90 m simplification
+buys. The script prints the attribution, so a real error would show up as `UNEXPLAINED`.
+
+**The limit no sampling can test.** MTBS perimeters are mapped fire *boundaries*, and they
+contain unburned ground: in the 2023 CONUS severity mosaic, **15.8% of the area inside mapped
+perimeters is classed "unburned to low"**. So this layer strictly means *"inside N mapped fire
+perimeters"*, not *"burned N times"* — the two diverge by roughly that much. Fixing it means
+counting on the severity mosaics rather than the perimeters, which is the milestone below.
+
 ### Still to build
 
 1. **Severity (drives at-rest colouring):** per-year CONUS thematic mosaics 1984–2024 from
