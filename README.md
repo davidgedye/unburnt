@@ -33,12 +33,12 @@ Working app covering **all 11 Western states, 1984–2024** — see `app/`:
   styling decisions.
 - **Animation:** **41 yearly states, 0.75 s each (~31 s)**, playing on load. The year rail down
   the right edge scrubs and snaps to whole years; grabbing it is the pause.
-- **Three views, one control:** tapping the handle cycles *accumulate* (every year up to the
-  one on show, fading with age) → *single year* (that season alone) → *repeat burns*. In the
-  third view the rail stops carrying years and carries **repeat level** instead: 2× at the
-  bottom up to 9× at the top, each stop showing every patch that has burned that many times
-  *or more*. A click parks the animation on the year it is showing and names the fire you
-  clicked; pan and zoom work at all times, playing or paused.
+- **Three views**, named in the title panel — *All years* (every year up to the one on show,
+  fading with age), *One year* (that season alone) and *Repeats*. Tapping the year handle
+  cycles the same three, as does `m`. In *Repeats* the rail stops carrying years and carries
+  **repeat level** instead: 2× at the bottom up to 9× at the top, each stop showing every patch
+  that has burned that many times *or more*. A click parks the animation on the year it is
+  showing and names the fire you clicked; pan and zoom work at all times, playing or paused.
 
 Run it locally: `npm run dev` (or `python3 serve.py`) → `http://localhost:8090/index.html`
 (URL params: `?data=west|wa`, `?lng=&lat=&z=`, `?year=1995`, `?mode=year|repeat`, `?level=4`,

@@ -51,6 +51,29 @@
       text-shadow: 0 1px 2px rgba(0,0,0,.6);
       transition: min-width .2s ease-out;
     }
+    /* The three views, said out loud. Tapping the year handle still cycles them — this is what
+       teaches that gesture, not a replacement for it. It sits directly under the stat row
+       because choosing Repeats rewrites that row, and the adjacency is what makes the
+       connection legible. A side effect worth having: it gives the panel a stable minimum
+       width, so scrubbing years no longer jitters the whole panel as the bar grows and
+       shrinks. */
+    #modes {
+      display: flex; margin-top: 8px; padding: 2px; gap: 2px;
+      background: rgba(255,255,255,.05); border-radius: 6px;
+    }
+    #modes button {
+      flex: 1; border: 0; border-radius: 4px; padding: 5px 6px;
+      background: transparent; color: var(--dim);
+      font: 600 11.5px/1.2 system-ui, sans-serif; white-space: nowrap; cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #modes button:hover { color: #fff; background: rgba(255,255,255,.06); }
+    /* The active view wears --hot, the same brick as the year handle and the stat bar: one
+       accent in the app, and the control reads as family with the rail it used to hide in. */
+    #modes button[aria-pressed="true"] {
+      background: var(--hot); color: #fff3ec; text-shadow: 0 1px 2px rgba(0,0,0,.5);
+    }
+    #modes button:focus-visible { outline: 2px solid var(--hot-lit); outline-offset: 1px; }
     #info-btn {
       float: right; margin: -1px 0 0 10px; width: 22px; height: 22px; border-radius: 50%;
       background: transparent; border: 1px solid rgba(255,255,255,.25); color: var(--ink);
@@ -159,16 +182,22 @@
     <button id="info-btn" aria-label="About this map" aria-expanded="false" aria-controls="about">i</button>
     <b>Wildfires of the West</b>
     <div id="stat">loading…</div>
+    <div id="modes" role="group" aria-label="View">
+      <button type="button" data-mode="all" aria-pressed="true">All years</button>
+      <button type="button" data-mode="year" aria-pressed="false">One year</button>
+      <button type="button" data-mode="repeat" aria-pressed="false">Repeats</button>
+    </div>
   </div>
 
   <div id="about" hidden>
     <p>Every wildfire large enough to enter the federal record across 11 Western states,
        1984&ndash;2024, played one year at a time. Older burns fade but never vanish, so what
        builds up is the cumulative footprint of four decades of fire.</p>
-    <p>Drag the handle on the right to move through time. Click any fire for its name, date
-       and size. Tapping the handle cycles the view: that season on its own, then where fires
-       have overlapped, then back to the accumulated map. In that third view the handle drives
-       repeat count rather than year &mdash; see below.</p>
+    <p>Drag the handle on the right to move through time, and click any fire for its name,
+       date and size. The three buttons under the title switch what the map is showing:
+       <b>All years</b> builds the record up one season at a time, <b>One year</b> shows a
+       single season on its own, and <b>Repeats</b> leaves the timeline for the question
+       below. Tapping the handle itself cycles the same three, if that is closer to hand.</p>
     <p>Most of what's mapped is unplanned wildfire, shown in the warm orange&ndash;red ramp.
        About 2% of the burned area, though, is prescribed fire &mdash; deliberately set for
        fuel reduction or habitat management &mdash; shown in blue instead, on the same
@@ -560,8 +589,10 @@ function paint() {
   labelHandle();
 }
 
-function cycleMode() {
-  mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+// The one way the mode ever changes, whether it came from a button, the handle tap or `m`.
+function setMode(m) {
+  if (m === mode || !MODES.includes(m)) return;
+  mode = m;
   if (mode === 'repeat') pause();     // a whole-record fact — there is nothing left to play
   // (pause() also fetches the repeat asset if this is the first time it has been wanted)
   closePopup();                                      // it may describe a fire no longer drawn
@@ -570,6 +601,8 @@ function cycleMode() {
   syncURL();
   dlog('mode -> ' + mode);
 }
+
+function cycleMode() { setMode(MODES[(MODES.indexOf(mode) + 1) % MODES.length]); }
 
 // Jump the rail and the map together, on whichever axis the rail is currently carrying.
 function snapTo(i) {
@@ -620,6 +653,9 @@ function labelHandle() {
   r.setAttribute('aria-valuetext',
     rep ? `Burned ${levels[lvl] ?? 2} or more times` : (years[idx] ?? ''));
   r.setAttribute('aria-label', rep ? 'Repeat burn level' : 'Year');
+  // The buttons are chrome for the same state, so they are re-stated here rather than set by
+  // whichever thing happened to change the mode — the handle tap and `m` update them too.
+  modeBtns.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
 }
 
 // --- The stat row -----------------------------------------------------------
@@ -630,6 +666,7 @@ function labelHandle() {
 // the handle climbs, which is the whole point being made.
 let acresByYear = [], firesByYear = [], peakAcres = 1;
 const stat = document.getElementById('stat');
+const modeBtns = [...document.querySelectorAll('#modes button')];
 const STAT_BAR_MIN = 14, STAT_BAR_MAX = 240;   // px; drives both the fill and the panel's floor
 
 function updateStat() {
@@ -749,6 +786,10 @@ function popupPlacement(feature, fallback) {
 }
 
 function wireControls() {
+  // Wired here rather than at parse time, alongside the rail: neither can do anything until
+  // the layers exist, and setMode() repaints.
+  modeBtns.forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+
   const queryLayers = layers.concat(rxLayers);   // both hues are clickable/hoverable alike
   // Whatever is actually drawn is what answers a click: the year layers on the timeline, the
   // repeat counts in repeat mode (where the year layers are a backdrop, not the subject).

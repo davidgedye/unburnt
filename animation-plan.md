@@ -46,8 +46,13 @@ There is no animation/explore split. The map is always live:
 - `?year=1995` parks on a given year, `?mode=year|repeat` opens a view, `?level=4` sets the
   repeat floor (a count, not an index — the two datasets number their levels differently).
 
-**Three views, and no control of their own.** Tapping the rail's handle cycles them, which is
-the whole reason a third one could be added for free:
+**Three views, named in the title panel.** A segmented control under the stat row — *All years
+/ One year / Repeats* — with the active one wearing `--hot`, the same brick as the handle and
+the bar. It sits there because choosing *Repeats* rewrites the stat row directly above it, and
+because the app's position is one panel and no on-map controls. Tapping the rail's handle still
+cycles the same three (and `m` still works): the buttons teach that gesture rather than
+replacing it. Every path goes through one `setMode()`, so none of them can leave the buttons
+out of step with the map.
 
 | Mode | What it shows | What the rail carries |
 |---|---|---|
@@ -62,6 +67,9 @@ everything that has burned five times or more, so the picture stays graded inste
 to one shade, and pushing the handle up peels the commoner ground away rather than swapping one
 map for another. What falls below the floor is not hidden — it drops back to the dim ember that
 every burned acre already wears underneath, which is what a reburn has to be read against.
+
+Discoverability was the reason the buttons exist: the handle tap alone was a gesture nobody
+would guess, and it hid two thirds of the app.
 
 The year and the level are **separate state** (`idx` and `lvl`), so leaving repeat mode puts you
 back on the year you left. Everything that positions or reads the handle goes through
