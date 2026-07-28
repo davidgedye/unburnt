@@ -111,9 +111,10 @@
     #year::after { bottom: -12px; transform: translateX(-50%) rotate(135deg); }
     /* At either end of the range, drop the arrow that points nowhere. */
     #year.at-min::after, #year.at-max::before { display: none; }
-    /* Single-year mode: the handle inverts, reading as focused rather than flowing. Same size
-       and position, so nothing shifts when it is tapped. */
-    #year.single {
+    /* Single-year and repeat modes: the handle inverts, reading as parked rather than flowing.
+       Same size and position, so nothing shifts when it is tapped; the label inside says which
+       axis the rail is on — a year, or a repeat level like "3+". */
+    #year.single, #year.repeat {
       background: #150a02; color: var(--hot-lit);
       box-shadow: 0 0 0 2px var(--hot-lit), 0 4px 14px rgba(0,0,0,.55);
     }
@@ -151,15 +152,34 @@
     <p>Every wildfire large enough to enter the federal record across 11 Western states,
        1984&ndash;2024, played one year at a time. Older burns fade but never vanish, so what
        builds up is the cumulative footprint of four decades of fire.</p>
-    <p>Drag the year handle on the right to move through time. Click any fire for its name,
-       date and size. Tap the year itself to show that season on its own, and tap again to
-       return to the accumulated view.</p>
+    <p>Drag the handle on the right to move through time. Click any fire for its name, date
+       and size. Tapping the handle cycles the view: that season on its own, then where fires
+       have overlapped, then back to the accumulated map. In that third view the handle drives
+       repeat count rather than year &mdash; see below.</p>
     <p>Most of what's mapped is unplanned wildfire, shown in the warm orange&ndash;red ramp.
        About 2% of the burned area, though, is prescribed fire &mdash; deliberately set for
        fuel reduction or habitat management &mdash; shown in blue instead, on the same
        fades-with-age ramp.</p>
     <p>The bar under the title is that season's total acres burned, on a common scale &mdash;
        longest is 2020 at 9.2 million acres, shortest 1991 at 0.5 million.</p>
+
+    <h4>Repeat burns</h4>
+    <p>The third view asks a different question: where has the same ground burned more than
+       once? Every mapped perimeter is stamped onto a 90&nbsp;m grid, so each cell knows how
+       many fires have crossed it. The whole 41-year footprint drops to a dim ember and the
+       reburns are lit on top of it, hotter the more often they have burned.</p>
+    <p>Here the handle stops being a year and becomes a threshold &mdash; 2 at the bottom,
+       up to 9 at the top. Drag it up and the ground that has only burned twice falls back
+       into the ember, until what is left is the small amount that keeps burning. Click any
+       patch for its own count.</p>
+    <p>About 19 million acres &mdash; a fifth of everything that has burned in the West since
+       1984 &mdash; has burned at least twice. Three million of those have burned three times,
+       and 900,000 acres four times or more. At the top of the rail sits a single 144-acre
+       hillside in the Santa Lucia Range behind the Big Sur coast: nine fires between 1992
+       and 2016.</p>
+    <p>The last two or three stops describe so little ground that it is smaller than a pixel
+       on a map of the whole West &mdash; the acreage beside the title is the honest measure
+       of them. Zoom in and they are there.</p>
 
     <h4>Fire data</h4>
     <p><a href="https://www.mtbs.gov/" target="_blank" rel="noopener">MTBS</a> &mdash; Monitoring
@@ -309,17 +329,19 @@ const q = new URLSearchParams(location.search);
 // `bounds` is the extent the opening view is fitted to — the full footprint of the data, rounded
 // out to the state edges beyond it (the westernmost fire stops short of the Pacific coastline).
 const DATASETS = {
-  west: { file: 'data/west_fires.geojson.gz', label: 'Western US',
+  west: { file: 'data/west_fires.geojson.gz', repeats: 'data/west_repeats.geojson.gz',
+          label: 'Western US',
           center: [-116.0, 41.3], zoom: 4.15, bounds: [[-124.9, 31.2], [-101.9, 49.1]] },
-  wa:   { file: 'data/wa_fires.geojson.gz',   label: 'Washington',
+  wa:   { file: 'data/wa_fires.geojson.gz',   repeats: 'data/wa_repeats.geojson.gz',
+          label: 'Washington',
           center: [-120.3, 47.4], zoom: 6.15, bounds: [[-124.9, 45.4], [-116.8, 49.2]] }
 };
 const DS = DATASETS[q.get('data')] || DATASETS.west;
 const DEBUG = q.has('debug');
 // Display modes, cycled by tapping the year handle. 'all' accumulates every year up to the one
-// on show and fades the older ones; 'year' shows that season alone. Ordered — #8's repeat-burn
-// view slots in here and costs no new interaction.
-const MODES = ['all', 'year'];
+// on show and fades the older ones; 'year' shows that season alone; 'repeat' leaves the
+// timeline entirely and shows where the same ground has burned more than once.
+const MODES = ['all', 'year', 'repeat'];
 let mode = MODES.includes(q.get('mode')) ? q.get('mode') : 'all';
 const YEAR_MS = 750;                       // one year per 0.75s of screen time
 
@@ -409,25 +431,89 @@ const { COLOR: RX_COLOR, OPACITY: RX_OPACITY } = buildRamp([
 ]);
 
 // ---------------------------------------------------------------------------
+// Repeat-burn view (#8) — how many fires have crossed each patch of ground since 1984.
+// Precomputed offline by pipeline/build-repeats.sh: every perimeter is stamped onto a 90 m
+// grid with GDAL's `-add`, and the cells are polygonized by count. The browser gets finished
+// polygons carrying `count` and does no geometry work, same as everywhere else here.
+//
+// Same warm ramp as wildfire rather than a fourth hue: hotter still means more fire. One
+// layer per count, 2 through 9 (9 is the record — one hillside behind Big Sur). Under them
+// every year layer is flattened to REPEAT_BASE — the whole 41-year footprint as one dim
+// ember, which is what "burned twice" has to be read against, and which is also what shows
+// through wherever a count is filtered out.
+//
+// Steps are far apart because they sit side by side rather than fading into each other over
+// time. The top few carry almost no acreage (8× and 9× are under 1,000 acres in the whole
+// West), so they are lifted well clear of the background to survive being a few pixels.
+// ---------------------------------------------------------------------------
+const REPEAT_BASE = '#7a2a16', REPEAT_BASE_OP = 0.30;    // burned once — context, not subject
+const REPEAT_MAX = 9;
+const REPEAT_RAMP = {           // count -> [colour, opacity]
+  2: ['#a83615', 0.62],
+  3: ['#cf5418', 0.72],
+  4: ['#ef741c', 0.80],
+  5: ['#ff9526', 0.86],
+  6: ['#ffb43a', 0.90],
+  7: ['#ffd24a', 0.93],
+  8: ['#ffe98f', 0.96],
+  9: ['#fff6c8', 0.98]
+};
+
+// ---------------------------------------------------------------------------
 // The whole animation state is ONE integer: idx, the index of the year on show.
 // Every paint value is a constant scalar (a GPU uniform) looked up by age, so there
 // are no data-driven expressions, no time quantisation, and no cached-state tracking.
 // N yearly states, and that is the entire state space.
 // ---------------------------------------------------------------------------
 let years = [], layers = [], rxLayers = [], N = 0, idx = 0, raf = null, fires = [], popup = null;
+// The repeat view's own axis, deliberately separate from `idx`: `levels` is the counts present
+// in the data (2…9 for the West, 2…5 for WA), and `lvl` indexes it. Keeping the year and the
+// level apart is what lets the rail carry one of them without destroying the other, so leaving
+// repeat mode puts you back on the year you left.
+let repLayers = [], repRings = [], repeats = [], levels = [2], lvl = 0, acresFrom = [];
+// ?level=4 opens on that level. It names a count, not an index — indexes shift between the
+// two datasets — so it can only be resolved once the data says which counts exist.
+const wantLevel = +q.get('level') || 0;
 const NOTHING = { type: 'FeatureCollection', features: [] };
-// `pos` is the handle's position as a *fractional* year index. It is presentation only: the map
-// still has exactly N integer states, and `idx` is still the whole of the animation's state.
-// Decoupling the two is what lets the handle glide while the fires step.
+// `pos` is the handle's position as a *fractional* index into whichever axis the rail is
+// currently carrying. It is presentation only: the map still has exactly N integer year states
+// plus one level per count. Decoupling the two is what lets the handle glide while fires step.
 let pos = 0;
 
-// Sets both a year's layers together: `layers[k]` (wildfire and everything else) and
-// `rxLayers[k]` (prescribed fire alone), same age, each on its own ramp.
+// Which axis the rail is driving, and where it is on it. Everything that positions or reads
+// the handle goes through these two, so the rail's mechanics are written once rather than
+// branched on the mode in five places.
+const railN = () => mode === 'repeat' ? levels.length : N;
+const railIdx = () => mode === 'repeat' ? lvl : idx;
+
+// Move the year. Repaints, since the year is one of the two things a repaint reads.
 function show(i) {
   idx = Math.max(0, Math.min(N - 1, i));
-  const single = mode === 'year';
+  paint();
+}
+
+// The repeat view's counterpart: move the level. Same shape, other axis.
+function setLevel(i) {
+  lvl = Math.max(0, Math.min(levels.length - 1, i));
+  paint();
+}
+
+// The one place paint values are written. Reads (mode, idx, lvl) and nothing else, so every
+// drawable state of the app is reachable by setting those three and calling this.
+//
+// Each year gets both its layers set together: `layers[k]` (wildfire and everything else) and
+// `rxLayers[k]` (prescribed fire alone), same age, each on its own ramp.
+function paint() {
+  const single = mode === 'year', rep = mode === 'repeat';
   for (let k = 0; k < N; k++) {
-    if (single) {                                    // that season alone, at full flare
+    if (rep) {
+      // Every year flattened to one dim ember: the question here is how often, not when or
+      // by whom, so age stops mattering and prescribed fire gives up its blue.
+      for (const id of [layers[k], rxLayers[k]]) {
+        map.setPaintProperty(id, 'fill-color', REPEAT_BASE);
+        map.setPaintProperty(id, 'fill-opacity', REPEAT_BASE_OP);
+      }
+    } else if (single) {                             // that season alone, at full flare
       const on = k === idx;
       map.setPaintProperty(layers[k], 'fill-opacity', on ? OPACITY[0] : 0);
       map.setPaintProperty(rxLayers[k], 'fill-opacity', on ? RX_OPACITY[0] : 0);
@@ -445,20 +531,42 @@ function show(i) {
       }
     }
   }
+  // One uniform per count, whatever the year — the repeat layers are one state, not N. The
+  // rail sets a *floor*, not a slice: at level 5 you see everything that burned five times or
+  // more, so the picture stays graded instead of collapsing to a single shade, and pushing the
+  // handle up peels the commoner ground away rather than swapping one map for another. What is
+  // filtered out is not hidden, it drops back to the dim ember every burned acre already wears.
+  for (let c = 2; c <= REPEAT_MAX; c++) {
+    const on = rep && c >= levels[lvl];
+    map.setPaintProperty(repLayers[c], 'fill-opacity', on ? REPEAT_RAMP[c][1] : 0);
+    map.setPaintProperty(repRings[c], 'line-opacity', on ? REPEAT_RAMP[c][1] : 0);
+  }
+  // The selection outline has to beat whatever it is drawn on. Flare-yellow reads over the
+  // fire ramp, but it is very nearly the top counts' own colour, so repeat mode takes white.
+  map.setPaintProperty('sel-line', 'line-color', rep ? '#ffffff' : '#fff2b0');
   labelHandle();
 }
 
 function cycleMode() {
   mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+  if (mode === 'repeat') pause();     // a whole-record fact — there is nothing left to play
+  // (pause() also fetches the repeat asset if this is the first time it has been wanted)
   closePopup();                                      // it may describe a fire no longer drawn
-  show(idx);
+  paint();
+  moveHandle(railIdx());     // the rail just changed axis; re-place the handle on the new one
   syncURL();
   dlog('mode -> ' + mode);
 }
 
-function snapTo(i) { show(i); moveHandle(i); }      // jump both together
+// Jump the rail and the map together, on whichever axis the rail is currently carrying.
+function snapTo(i) {
+  if (mode === 'repeat') setLevel(i); else show(i);
+  moveHandle(railIdx());
+}
 
-// --- Year rail -------------------------------------------------------------
+// --- The rail --------------------------------------------------------------
+// One control, two axes: years on the timeline, repeat levels in repeat mode — 2× at the
+// bottom, 9× at the top, same direction of travel (up = more).
 // The handle's travel is inset from the window edges so the lozenge never half-leaves the
 // screen at either end. Geometry is read live rather than cached: the map is full-bleed, so
 // a rotation or resize changes the rail height under us.
@@ -469,52 +577,66 @@ function railGeom() {
   return { top: r.top, height: r.height, span: Math.max(1, r.height - 2 * RAIL_PAD) };
 }
 
-// Position only — a float year index. Cheap enough to call every frame: it writes one CSS
-// length and touches nothing MapLibre owns.
+// Position only — a float index into the active axis. Cheap enough to call every frame: it
+// writes one CSS length and touches nothing MapLibre owns.
 function moveHandle(p) {
-  pos = Math.max(0, Math.min(N - 1, p));
+  const M = railN();
+  pos = Math.max(0, Math.min(M - 1, p));
   const { span } = railGeom();
-  const t = N > 1 ? pos / (N - 1) : 0;                // 0 = earliest, at the bottom
+  const t = M > 1 ? pos / (M - 1) : 0;                // 0 = earliest / fewest, at the bottom
   document.getElementById('year').style.bottom = (RAIL_PAD + t * span) + 'px';
 }
 
-// Text and state — driven by the integer year, so the label never shows a year the map is not
-// actually displaying, however far between years the handle happens to sit.
+// Text and state — driven by the integer index, so the label never shows a year (or a level)
+// the map is not actually displaying, however far between stops the handle happens to sit.
 function labelHandle() {
   const el = document.getElementById('year');
-  el.textContent = years[idx] ?? '—';
+  const rep = mode === 'repeat';
+  // "3+", not "3": the rail is a floor, and the map is showing every count at or above it.
+  el.textContent = rep ? (levels[lvl] ?? 2) + '+' : (years[idx] ?? '—');
   el.classList.toggle('single', mode === 'year');    // also covers arriving via ?mode=year
-  el.classList.toggle('at-min', idx <= 0);           // 1984: only the up arrow
-  el.classList.toggle('at-max', N > 0 && idx >= N - 1);   // 2024: only the down arrow
+  el.classList.toggle('repeat', rep);
+  const i = railIdx(), M = railN();
+  el.classList.toggle('at-min', i <= 0);             // 1984 / 2×: only the up arrow
+  el.classList.toggle('at-max', M > 0 && i >= M - 1);     // 2024 / 9×: only the down arrow
   updateStat();
   const r = rail();
   r.setAttribute('aria-valuemin', 0);
-  r.setAttribute('aria-valuemax', Math.max(0, N - 1));
-  r.setAttribute('aria-valuenow', idx);
-  r.setAttribute('aria-valuetext', years[idx] ?? '');
+  r.setAttribute('aria-valuemax', Math.max(0, M - 1));
+  r.setAttribute('aria-valuenow', i);
+  r.setAttribute('aria-valuetext',
+    rep ? `Burned ${levels[lvl] ?? 2} or more times` : (years[idx] ?? ''));
+  r.setAttribute('aria-label', rep ? 'Repeat burn level' : 'Year');
 }
 
-// --- Year stat --------------------------------------------------------------
-// Fires/acres for the year on show, written in the title panel over a bar sized against the
-// 41-year peak. Always that year's own totals, in both display modes — same numbers whether
-// the map is accumulating or showing that season alone.
+// --- The stat row -----------------------------------------------------------
+// One row, one shape, whichever axis the rail is on: a headline number written over a bar
+// whose width is that number against the largest the axis reaches. On the timeline it is the
+// year's fires and acres against the 41-year peak; in repeat mode it is the acreage at or
+// above the chosen level, against the acreage at level 2 — so the bar visibly collapses as
+// the handle climbs, which is the whole point being made.
 let acresByYear = [], firesByYear = [], peakAcres = 1;
 const stat = document.getElementById('stat');
 const STAT_BAR_MIN = 14, STAT_BAR_MAX = 240;   // px; drives both the fill and the panel's floor
 
 function updateStat() {
-  const acres = acresByYear[idx] || 0, count = firesByYear[idx] || 0;
-  const px = Math.round(STAT_BAR_MIN + (STAT_BAR_MAX - STAT_BAR_MIN) * (acres / peakAcres));
+  const rep = mode === 'repeat';
+  const acres = rep ? (acresFrom[lvl] || 0) : (acresByYear[idx] || 0);
+  const peak = rep ? (acresFrom[0] || 1) : peakAcres;
+  const px = Math.round(STAT_BAR_MIN + (STAT_BAR_MAX - STAT_BAR_MIN) * (acres / peak));
   stat.style.setProperty('--fill', px + 'px');
   stat.style.minWidth = px + 'px';
-  stat.textContent = `${count.toLocaleString()} fires · ${Math.round(acres).toLocaleString()} acres`;
+  stat.textContent = rep
+    ? (acresFrom.length ? `burned ${levels[lvl]}+ times · ${acres.toLocaleString()} acres`
+                        : 'loading\u2026')          // the asset is still on its way
+    : `${(firesByYear[idx] || 0).toLocaleString()} fires · ${Math.round(acresByYear[idx] || 0).toLocaleString()} acres`;
 }
 
 function posAtY(clientY) {
   const g = railGeom();
-  const fromBottom = g.top + g.height - clientY;      // invert: y grows downward, years upward
+  const fromBottom = g.top + g.height - clientY;      // invert: y grows downward, the axis upward
   const t = (fromBottom - RAIL_PAD) / g.span;
-  return Math.max(0, Math.min(1, t)) * (N - 1);
+  return Math.max(0, Math.min(1, t)) * (railN() - 1);
 }
 
 // Driven by rAF rather than setInterval so the handle advances with the display refresh instead
@@ -531,6 +653,7 @@ function play() {
     if (yr !== idx) { show(yr); dlog(`${years[idx]}  (state ${idx + 1}/${N})`); }
     if (p >= N - 1) {
       raf = null; show(N - 1); syncURL();            // parked on the final year: now shareable
+      loadRepeats();                                 // the run is over; the thread is free
       dlog('DONE — final year shown, no further updates');
       return;
     }
@@ -538,7 +661,7 @@ function play() {
   };
   raf = requestAnimationFrame(frame);
 }
-function pause() { cancelAnimationFrame(raf); raf = null; }
+function pause() { cancelAnimationFrame(raf); raf = null; loadRepeats(); }
 
 // "1990-09-07" -> "7 September 1990".
 // The 'T00:00' matters: a bare "1990-09-07" is parsed as UTC and renders as the 6th anywhere
@@ -571,6 +694,8 @@ function syncURL() {
     // carrying one would open on a stopped animation instead of playing.
     if (raf) p.delete('year'); else p.set('year', years[idx]);
     if (mode === MODES[0]) p.delete('mode'); else p.set('mode', mode);
+    // The level is a count (2..9), not an index — the two datasets number them differently.
+    if (mode === 'repeat' && lvl > 0) p.set('level', levels[lvl]); else p.delete('level');
     history.replaceState(null, '', location.pathname + '?' + p);
   }, 200);
 }
@@ -612,6 +737,17 @@ function popupPlacement(feature, fallback) {
 
 function wireControls() {
   const queryLayers = layers.concat(rxLayers);   // both hues are clickable/hoverable alike
+  // Whatever is actually drawn is what answers a click: the year layers on the timeline, the
+  // repeat counts in repeat mode (where the year layers are a backdrop, not the subject).
+  // repLayers/repRings are indexed *by count*, so they are sparse — the query API needs a dense
+  // list. The rings go in too: at low zoom a small patch is all ring and no fill, and it would
+  // otherwise be the one thing on screen that cannot be clicked.
+  const repQuery = repLayers.filter(Boolean).concat(repRings.filter(Boolean));
+  const hitLayers = () => mode === 'repeat' ? repQuery : queryLayers;
+  // A layer at zero opacity is still queryable, so what is actually *shown* has to be restated
+  // here: years not yet reached on the timeline, counts under the rail's floor in repeat mode.
+  const shown = f => mode === 'repeat' ? f.properties.count >= levels[lvl]
+                                       : f.properties.year <= years[idx];
   // Dragging anywhere in the rail scrubs. Pointer capture keeps the drag alive when the finger
   // or cursor wanders off the 56px strip, which on a phone it constantly does.
   const r = rail();
@@ -622,8 +758,8 @@ function wireControls() {
   const track = clientY => {
     const p = posAtY(clientY);
     moveHandle(p);
-    const yr = Math.round(p);
-    if (yr !== idx) show(yr);
+    const i = Math.round(p);
+    if (i !== railIdx()) { if (mode === 'repeat') setLevel(i); else show(i); }
   };
   // A press that starts on the handle might be a tap (cycle the mode) or the start of a drag, and
   // which one it is is not known until the pointer moves or lets go. So it is held: the year is
@@ -657,18 +793,20 @@ function wireControls() {
     }
     if (!dragging) return;
     dragging = false;
-    moveHandle(idx);                                 // settle onto the year it landed on
+    moveHandle(railIdx());                           // settle onto the stop it landed on
     syncURL();
   };
   r.addEventListener('pointerup', e => end(e, true));
   r.addEventListener('pointercancel', e => end(e, false));
 
+  // Keys drive whichever axis the rail is on, so the same four keys scrub years or levels.
+  const goTo = i => { closePopup(); pause(); snapTo(i); };
   r.addEventListener('keydown', e => {
     const step = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1,
                    PageUp: 5, PageDown: -5 }[e.key];
-    if (step) { closePopup(); pause(); snapTo(idx + step); }
-    else if (e.key === 'Home') { closePopup(); pause(); snapTo(0); }
-    else if (e.key === 'End') { closePopup(); pause(); snapTo(N - 1); }
+    if (step) goTo(railIdx() + step);
+    else if (e.key === 'Home') goTo(0);
+    else if (e.key === 'End') goTo(railN() - 1);
     else if (e.key === 'm' || e.key === 'M') { cycleMode(); }   // the tap, for keyboard users
     else return;
     syncURL();
@@ -685,8 +823,7 @@ function wireControls() {
   // Pointer cursor over a clickable fire (a point query, not a viewport-wide one — those are
   // costly and nudge MapLibre's render state). Empty string restores the default grab hand.
   map.on('mousemove', e => {
-    const over = map.queryRenderedFeatures(e.point, { layers: queryLayers })
-      .some(f => f.properties.year <= years[idx]);
+    const over = map.queryRenderedFeatures(e.point, { layers: hitLayers() }).some(shown);
     map.getCanvas().style.cursor = over ? 'pointer' : '';
   });
 
@@ -695,27 +832,35 @@ function wireControls() {
   map.on('click', e => {
     pause();
     syncURL();                                       // a click parks the year — record it
-    const hits = map.queryRenderedFeatures(e.point, { layers: queryLayers })
-      .filter(f => f.properties.year <= years[idx]);   // ignore years not yet shown
+    const rep = mode === 'repeat';
+    const hits = map.queryRenderedFeatures(e.point, { layers: hitLayers() }).filter(shown);
     // Close first: removing a popup fires its close handler, which clears the outline. Doing it
     // before the new one is drawn stops the old handler wiping the new selection.
     closePopup();
     if (!hits.length) return;
     const p = hits[0].properties;
-    // Always three lines: name, date, acreage. Assessment is dropped — 62% are "Initial" and
-    // the word carries almost no information. Type is dropped too *unless* it's the one worth
-    // knowing: a prescribed burn, already called out by its blue hue, gets a fourth line so the
-    // popup explains what the colour meant instead of leaving it to be inferred.
-    const acres = p.acres == null ? 'acreage unknown'
-                                  : `${Math.round(p.acres).toLocaleString()} acres`;
-    const rx = p.type === 'Prescribed Fire' ? '<br><span class="rx-tag">Prescribed burn</span>' : '';
-    // Stroke the fire being described, from the full original geometry rather than the clipped
+    // On the timeline, always three lines: name, date, acreage. Assessment is dropped — 62% are
+    // "Initial" and the word carries almost no information. Type is dropped too *unless* it's
+    // the one worth knowing: a prescribed burn, already called out by its blue hue, gets a
+    // fourth line so the popup explains what the colour meant instead of leaving it to be
+    // inferred. A repeat patch has no name and no date — only its count, which is the whole
+    // point of the view, so that is all it says.
+    let html;
+    if (rep) {
+      html = `<b>Burned ${p.count === 2 ? 'twice' : p.count + ' times'}</b><br>since 1984`;
+    } else {
+      const acres = p.acres == null ? 'acreage unknown'
+                                    : `${Math.round(p.acres).toLocaleString()} acres`;
+      const rx = p.type === 'Prescribed Fire' ? '<br><span class="rx-tag">Prescribed burn</span>' : '';
+      html = `<b>${p.name}</b><br>${longDate(p.ig_date)}<br>${acres}${rx}`;
+    }
+    // Stroke the shape being described, from the full original geometry rather than the clipped
     // copy the query returned.
-    const feature = fires[p.fid];
+    const feature = rep ? repeats[p.rid] : fires[p.fid];
     map.getSource('sel').setData(feature ?? NOTHING);
     const { lngLat, anchor } = popupPlacement(feature, e.lngLat);
     popup = new maplibregl.Popup({ anchor, offset: GAP }).setLngLat(lngLat)
-      .setHTML(`<b>${p.name}</b><br>${longDate(p.ig_date)}<br>${acres}${rx}`)
+      .setHTML(html)
       .addTo(map);
     popup.on('close', () => map.getSource('sel')?.setData(NOTHING));
   });
@@ -726,7 +871,7 @@ function wireControls() {
 // content-encoding config. Gzip magic-byte detection means it also works if the host
 // does send Content-Encoding: gzip (in which case the browser already decompressed).
 // ---------------------------------------------------------------------------
-async function loadFires(url) {
+async function loadGz(url) {
   const buf = await (await fetch(url)).arrayBuffer();
   const u8 = new Uint8Array(buf);
   if (u8[0] === 0x1f && u8[1] === 0x8b) {
@@ -736,7 +881,41 @@ async function loadFires(url) {
   return JSON.parse(new TextDecoder().decode(u8));
 }
 
-Promise.all([loadFires(DS.file), new Promise(res => map.on('load', res))]).then(([fc]) => {
+// The repeat-burn asset, fetched at most once and never while the animation is running.
+// It is only 1.8 MB, but inflating and parsing it blocks the main thread for ~75 ms, and a
+// dropped frame or two mid-run is exactly the kind of hitch this engine is built to avoid.
+// So it waits for the animation to stop — which it does when the run ends, and the moment
+// anything pauses it, including the tap that asks for repeat mode in the first place. Worst
+// case that tap beats the fetch and the buckets are empty for a moment; the paint state is
+// already correct, so they simply appear when the data lands.
+let repeatsLoad = null;
+function loadRepeats() {
+  return repeatsLoad ??= loadGz(DS.repeats).then(rc => {
+    const seen = new Set();
+    rc.features.forEach((f, i) => {
+      f.properties.rid = i;                          // indexes back into `repeats`
+      seen.add(f.properties.count);
+    });
+    repeats = rc.features;
+    // The rail's stops come from the data, not from a constant: the West reaches 9× but the
+    // WA slice stops at 5×, and a rail with four dead stops at the top would be a lie.
+    levels = [...seen].sort((a, b) => a - b);
+    // Acreage at or above each level, summed once. Walking down from the top makes it a single
+    // running total rather than a scan per level.
+    acresFrom = levels.map(() => 0);
+    for (const f of rc.features) {
+      const at = levels.indexOf(f.properties.count);
+      for (let i = 0; i <= at; i++) acresFrom[i] += f.properties.acres || 0;
+    }
+    map.getSource('repeats').setData(rc);
+    const asked = levels.indexOf(wantLevel);
+    lvl = asked >= 0 ? asked : Math.min(lvl, levels.length - 1);   // axis now has its real length
+    if (mode === 'repeat') { paint(); moveHandle(lvl); }
+    dlog(`${rc.features.length} repeat-burn polygons, levels ${levels.join(',')}`);
+  }).catch(err => console.error('repeat-burn layer failed to load:', err));
+}
+
+Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([fc]) => {
   const seen = new Set();
   fc.features.forEach((f, i) => {
     f.properties.year = +f.properties.ig_date.slice(0, 4);
@@ -779,6 +958,42 @@ Promise.all([loadFires(DS.file), new Promise(res => map.on('load', res))]).then(
     });
   });
 
+  // Repeat-burn counts — one fill per count, over every year layer, so the reburns sit on top
+  // of the footprint they came out of. All eight are created whatever the dataset holds (WA
+  // tops out at 5×); an unused one simply matches nothing. The source starts empty and is
+  // filled when the asset lands, so the stacking order is fixed by the code rather than by
+  // when a fetch happens to finish.
+  map.addSource('repeats', { type: 'geojson', data: NOTHING });
+  for (let c = 2; c <= REPEAT_MAX; c++) {
+    repLayers[c] = 'rep-' + c;
+    map.addLayer({
+      id: repLayers[c], type: 'fill', source: 'repeats',
+      filter: ['==', ['get', 'count'], c],
+      paint: { 'fill-color': REPEAT_RAMP[c][0], 'fill-opacity': 0 }
+    });
+  }
+  // ...and a hairline ring on each, above all the fills. The rail's upper stops describe very
+  // little ground, and a patch smaller than a pixel leaves a fill with nothing to draw — which
+  // reads as "the level is empty" when it is not. The ring is measured in screen pixels, so it
+  // gives every patch a floor on its visible size; it is gone by z9, where the fill is big
+  // enough to speak for itself. Width is a plain zoom interpolate, so this is still not
+  // data-driven paint. Measured at z4: it recovers 25–50% more visible mark at levels 3–7.
+  //
+  // It cannot rescue 8× and 9×, and nothing in the paint layer can: MapLibre's own tiling drops
+  // rings under the simplification tolerance, so below z6 those two have no geometry at all.
+  // Turning that off (`tolerance: 0` on the source) does make them draw — for 830 ms of blocked
+  // main thread per retile against 225 ms, to gain a single pixel. Not taken; at z6 and closer
+  // they render normally, and the acreage in the stat row is what carries them zoomed out.
+  for (let c = 2; c <= REPEAT_MAX; c++) {
+    repRings[c] = 'rep-ring-' + c;
+    map.addLayer({
+      id: repRings[c], type: 'line', source: 'repeats',
+      filter: ['==', ['get', 'count'], c],
+      paint: { 'line-color': REPEAT_RAMP[c][0], 'line-opacity': 0,
+               'line-width': ['interpolate', ['linear'], ['zoom'], 3, 1.4, 6, 1.1, 9, 0] }
+    });
+  }
+
   // The selected fire's outline. Its own tiny source rather than a filter on `fires`: changing
   // a filter on an 11k-feature layer re-lays it out, and the geometry that comes back from
   // queryRenderedFeatures is clipped at tile edges, which would stroke only part of a big burn.
@@ -793,8 +1008,14 @@ Promise.all([loadFires(DS.file), new Promise(res => map.on('load', res))]).then(
   wireControls();
   dlog(`${fc.features.length} fires, ${N} yearly states, ${layers.length + rxLayers.length} layers`);
   const jump = years.indexOf(+q.get('year'));        // ?year=1995 parks there, for sharing/testing
-  if (jump >= 0) snapTo(jump);
+  // Repeat mode is outside the timeline, so it never plays; it parks on the last year, which
+  // is where dragging out of it lands you — the full accumulated map.
+  // In repeat mode the year is parked out of sight behind the view — it is where the timeline
+  // resumes when the handle is tapped back onto it — and the rail starts at the lowest level.
+  if (mode === 'repeat') { show(jump >= 0 ? jump : N - 1); snapTo(0); }
+  else if (jump >= 0) snapTo(jump);
   else { snapTo(0); play(); }
+  if (!raf) loadRepeats();       // nothing is playing, so nothing is there to interrupt
 });
 </script>
 </body>

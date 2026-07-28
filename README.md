@@ -11,7 +11,7 @@ four decades of burning. Burn **severity** data is kept for a future at-rest vie
 > The repo name is a holdover from the project's earlier framing as a hike-planning tool. A
 > rename is deferred until the visualization settles.
 
-## Status (2026-07-25)
+## Status (2026-07-27)
 
 Working app covering **all 11 Western states, 1984–2024** — see `app/`:
 
@@ -21,17 +21,28 @@ Working app covering **all 11 Western states, 1984–2024** — see `app/`:
   inflated in the browser, so no server config is needed. Geometry is simplified to ~200 m —
   **17.8 M vertices → 478 k (−97.3%) for 0.44% area distortion**, sub-pixel at the zooms the
   animation plays at. See `animation-plan.md` → "Simplification".
+- **Repeat burns:** **10,872 polygons** (`app/data/west_repeats.geojson.gz`, 1.9 MB gzipped),
+  the same perimeters counted onto a 90 m grid so each patch of ground carries how many fires
+  have crossed it since 1984, and its acreage. Built offline by `pipeline/build-repeats.sh`, and
+  never fetched while the animation is running — inflating it blocks the main thread for ~75 ms,
+  so it waits for the run to end or for anything to pause it (including the tap that asks for
+  the view).
 - **Base map:** bland dark vector base (OpenFreeMap) that scales — state boundaries, coastline
   and interstates at overview zoom; cities, then villages/hamlets, rivers, streams, forest and
   park shading, road tiers and buildings as you zoom in. No user-facing toggles: these are
   styling decisions.
-- **Animation:** **41 yearly states, 0.75 s each (~31 s)**. Play/pause/replay from one button,
-  plus a scrubber that snaps to whole years.
-- **No modes:** a click parks the animation on the year it is showing and names the fire you
+- **Animation:** **41 yearly states, 0.75 s each (~31 s)**, playing on load. The year rail down
+  the right edge scrubs and snaps to whole years; grabbing it is the pause.
+- **Three views, one control:** tapping the handle cycles *accumulate* (every year up to the
+  one on show, fading with age) → *single year* (that season alone) → *repeat burns*. In the
+  third view the rail stops carrying years and carries **repeat level** instead: 2× at the
+  bottom up to 9× at the top, each stop showing every patch that has burned that many times
+  *or more*. A click parks the animation on the year it is showing and names the fire you
   clicked; pan and zoom work at all times, playing or paused.
 
 Run it locally: `npm run dev` (or `python3 serve.py`) → `http://localhost:8090/index.html`
-(URL params: `?data=west|wa`, `?lng=&lat=&z=`, `?year=1995`, `?debug=1`).
+(URL params: `?data=west|wa`, `?lng=&lat=&z=`, `?year=1995`, `?mode=year|repeat`, `?level=4`,
+`?debug=1`).
 Use `serve.py` rather than `python3 -m http.server`: it sends `no-store`, so a reload always
 picks up the latest build. Cross-check the `build N` stamp in the title panel.
 
@@ -57,8 +68,13 @@ exist for all 41 years on ScienceBase, but the newest 1–2 are substantively in
   This is what keeps the engine small and verifiable.
 - **Fade model — accumulate & fade:** a year's fires stay on the map, dimming one step per
   subsequent year toward a still-visible ember floor. The final state shows all 41 years at once.
-- **No view modes:** one always-live map. A click or scrubber drag parks the animation where it
-  is; panning and zooming always work. Severity colouring awaits the raster build.
+- **Modes cost no new controls.** The three views are cycled by tapping the handle, which is
+  already there and already under the thumb — no menu, no toolbar. Because the tap is the only
+  way in or out, the *drag* is free to mean something different in each view: on the timeline it
+  scrubs years, in repeat mode it scrubs burn counts. Year and level are separate state, so
+  leaving repeat mode returns you to the year you left. A click or rail drag parks the animation
+  where it is; panning and zooming always work. Severity colouring still awaits the raster
+  build.
 - **Fire mark:** the real perimeter polygon. **No glow** — it caused two separate bugs and was
   removed rather than debugged further (see `animation-plan.md` → "Debugging history").
 - **Map library:** MapLibre GL JS — no account, no token, no per-load billing. (A satellite

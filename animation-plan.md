@@ -5,8 +5,8 @@
 A visualization of **every Western US wildfire in the ~40-year MTBS record (1984–present)**.
 On load, an animation steps through the record one year at a time: each year's fires appear at
 full intensity, then fade with age without disappearing, so the run accumulates into one picture
-of four decades of burning, which is where it stops. There are no modes: a click parks the
-animation on the year it is showing, and panning and zooming work throughout.
+of four decades of burning, which is where it stops. A click parks the animation on the year it
+is showing, and panning and zooming work throughout.
 
 This supersedes the project's original framing as a hike-planning tool. The
 data/pipeline/architecture decisions in `recommendation.md` still hold (MTBS + WFIGS →
@@ -23,7 +23,7 @@ vectorized PMTiles on R2, MapLibre GL JS, Cloudflare); this doc supersedes its *
 | Geographic scope | **11 Western states** (WA, OR, CA, ID, NV, UT, AZ, MT, WY, CO, NM) — **built**, 11,377 fires. WA (643) kept as a lighter dataset |
 | Animation granularity | **One state per year** — 41 discrete states, 0.75 s each (~31 s total). No within-year ignition timing |
 | Animation fade model | **Accumulate & fade** — a year's fires stay on the map, dimming with age toward a still-visible ember floor; the final frame shows all 40 years at once |
-| Interaction | **No modes.** A click (or a scrubber drag) parks the animation on the year it is showing; panning and zooming work at all times |
+| Interaction | **One control, two axes.** The rail scrubs years on the timeline and repeat levels in repeat mode; tapping its handle cycles the three views. A click (or a rail drag) parks the animation on the year it is showing; panning and zooming work at all times |
 | Fire mark | **Filled perimeter polygon only.** No glow — see "Why the glow is gone" |
 | Map stack | **MapLibre GL JS.** No account, token, or metered billing |
 | Base map | Bland at overview zoom, progressively more detail as you zoom |
@@ -32,21 +32,44 @@ vectorized PMTiles on R2, MapLibre GL JS, Cloudflare); this doc supersedes its *
 The base map is **decoupled** from the animation/data layers, so swapping it later (even to
 Mapbox/MapTiler) touches only the base style — nothing in the animation engine.
 
-## Interaction — one mode only
+## Interaction — one control
 
 There is no animation/explore split. The map is always live:
 
 - **Plays on load** — 41 yearly states, 0.75 s each ≈ 31 s.
 - **A click parks it** on the year currently showing, and names the fire clicked (if any).
   Fires from years not yet reached are ignored by the hit test.
-- **The scrubber** pauses and jumps to any year; it snaps to whole years.
-- **Play/pause/replay** is one button. After the last year, play restarts from 1984.
+- **The year rail** down the right edge pauses and jumps to any year; it snaps to whole years.
+  There is no play button — grabbing the rail *is* the pause.
 - **Pan and zoom work throughout**, playing or paused — MapLibre never blocked them, which is
   why a separate "explore mode" turned out to be unnecessary.
-- `?year=1995` parks on a given year, for sharing or testing.
+- `?year=1995` parks on a given year, `?mode=year|repeat` opens a view, `?level=4` sets the
+  repeat floor (a count, not an index — the two datasets number their levels differently).
 
-Colour encodes **recency only**. The final state — all 41 years, 2024 hot, 1984 faint — is
-simply where the animation stops.
+**Three views, and no control of their own.** Tapping the rail's handle cycles them, which is
+the whole reason a third one could be added for free:
+
+| Mode | What it shows | What the rail carries |
+|---|---|---|
+| `all` (default) | Every year up to the one on show, fading with age. Colour encodes **recency only** | Year, 1984 → 2024 |
+| `year` | That season alone, at full flare | Year, 1984 → 2024 |
+| `repeat` | Ground that has burned more than once, coloured by **how often** (#8) | Repeat level, 2× → 9× |
+
+`repeat` steps outside the timeline — a burn count is a fact about all 41 years, not about a
+year — so **the rail changes axis rather than freezing**: 2× at the bottom, 9× at the top, same
+direction of travel (up = more). The level is a **floor, not a slice**: at 5+ the map shows
+everything that has burned five times or more, so the picture stays graded instead of collapsing
+to one shade, and pushing the handle up peels the commoner ground away rather than swapping one
+map for another. What falls below the floor is not hidden — it drops back to the dim ember that
+every burned acre already wears underneath, which is what a reburn has to be read against.
+
+The year and the level are **separate state** (`idx` and `lvl`), so leaving repeat mode puts you
+back on the year you left. Everything that positions or reads the handle goes through
+`railN()` / `railIdx()`, so the rail's mechanics — drag, keys, settle, aria — are written once
+rather than branched on the mode in five places. Tapping the handle is still the only way in or
+out, which is what freed the drag gesture up for this in the first place.
+
+The `all` end state — all 41 years, 2024 hot, 1984 faint — is simply where the animation stops.
 
 **Pace note:** the pace is *per year* (0.75 s/yr), so total duration grows as the record grows.
 A fixed total duration was considered and rejected: constant per-year pace keeps "the speed of
@@ -249,6 +272,75 @@ to 7, since simplification erased some self-intersecting stair-steps. Note the *
 ships with 34 invalid geometries of its own**. And one global tolerance is inherently a
 compromise; the PMTiles/tippecanoe step below generalizes *per zoom level* instead.
 
+### Repeat burns — ✅ built (`pipeline/build-repeats.sh`)
+
+Where has the same ground burned more than once? Pairwise polygon overlay over 11,377
+perimeters is the obvious answer and the wrong one — it is O(fires²) of exact geometry, and
+this engine deliberately does no runtime geometry at all. Counting on a raster is O(area) and
+gets the whole answer in 40 seconds:
+
+```
+gdal_rasterize -burn 1 -add -tr 90 90   # each cell = how many perimeters cover it
+gdal_sieve.py  -st 16 -nomask           # drop the sub-32-acre fringe between adjacent fires
+gdal_calc.py   "255*(A>=2)"             # count 1 is just "burned" — the animation has that
+gdal_polygonize.py -mask …              # 10,872 polygons carrying `count`
+ogr2ogr -t_srs EPSG:4326 -simplify 90   # → app/data/west_repeats.geojson.gz, 1.8 MB gzipped
+```
+
+Grid is **EPSG:5070 (Conus Albers), 90 m cells** — equal-area, so a count means the same thing
+in Arizona as at the Canadian border, and one cell is ~2 acres. Findings:
+
+| burned | acres | share of footprint |
+|---|---|---|
+| once | 77.5 M | 80.3% |
+| twice | 15.0 M | 15.5% |
+| 3× | 3.0 M | 3.1% |
+| 4× or more | 0.9 M | 0.9% |
+
+Deepest is **9 fires, 1992–2016, on one hillside in the Santa Lucia Range** behind Big Sur.
+
+**Prescribed fire is included, and checked rather than assumed** — burn units are re-burned on
+purpose, so they could have made this a map of land management instead of fire. They don't:
+only 4–7% of reburned acreage involves *any* prescribed fire, and ≤2.6% involves two or more.
+
+**Two tunings worth keeping:**
+
+1. **`-simplify` is per-feature, and these polygons tile a coverage**, so neighbours pull apart
+   by up to the tolerance and leave a hairline crack that shows from ~z10 in. 150 m gets the
+   file to 1.2 MB but the cracks are visible; 60 m is clean at 3.4 MB; **90 m — one cell — is
+   clean enough at 1.8 MB**, and "no vertex moves further than the grid it came off" is a rule
+   that explains itself. GDAL has no coverage-aware simplifier, so this is the lever available.
+2. **The script deletes its outputs before it runs.** `gdal_rasterize` *updates* an existing
+   target rather than replacing it — a second run would silently add its counts on top of the
+   first's and double every number in the table above.
+
+**In the browser** the asset is one fill layer per count (2…9) over the year layers, each with
+a constant colour and a constant opacity — the same no-data-driven-paint rule as everything
+else, and eight more uniforms rather than N. The rail sets which counts are lit. Each fill also
+gets a **hairline ring**, sized in screen pixels and gone by z9: a patch smaller than a pixel
+leaves a fill with nothing to draw, which reads as "this level is empty" when it is not, and at
+z4 the ring recovers 25–50% more visible mark at levels 3–7.
+
+It **cannot** rescue 8× and 9×, and nothing in the paint layer can — MapLibre's own tiling drops
+rings under its simplification tolerance, so below **z6** those two counts have no geometry at
+all. `tolerance: 0` on the source does make them draw, at **830 ms of blocked main thread per
+retile against 225 ms**, to gain a single pixel. Not taken: at z6 and closer they render
+normally, and zoomed out the acreage in the stat row is what carries them.
+
+Each polygon also ships its `acres`, measured in Albers before simplification, which the app
+sums per level. That is what the stat row reports — 18,909,948 acres at 2+ down to 144 at 9+ —
+on the same bar the year stat uses, so the bar visibly collapses as the handle climbs.
+
+The asset is **never fetched while the animation is running**:
+1.8 MB inflates and parses in ~75 ms of blocked main thread, which is a dropped frame or two,
+so the load waits for the run to end or for anything to pause it — including the tap that asks
+for the view. Measured: fetch starts at 31.1 s on a plain load, 1.1 s when opened parked, and
+4.6 s when the mode is tapped into 4 s in.
+
+Only the counts are stored, not *which* years overlapped; that needs true polygon overlay
+(shapely/PostGIS) and a much heavier job. Build it only if the popup ever needs to say more
+than "burned 9 times".
+
 ### Still to build
 
 1. **Severity (drives at-rest colouring):** per-year CONUS thematic mosaics 1984–2024 from
@@ -282,11 +374,14 @@ compromise; the PMTiles/tippecanoe step below generalizes *per zoom level* inste
 3. ~~**Full-scope perimeter build**~~ ✅ 11 states × 41 years, 11,377 fires, 2.8 MB gzipped.
 4. ~~**Animation performance**~~ ✅ 59–61 fps on real hardware.
 5. ~~**Engine simplification**~~ ✅ integer-year states; engine 483 → 171 lines (−65%), no
-   data-driven paint anywhere, and no view modes. Fixed the long-standing "fires flashing after
-   the end" bug.
-6. **Severity layer** — build the raster half of the pipeline so a parked animation can colour by
+   data-driven paint anywhere, and no view modes at that point. Fixed the long-standing "fires
+   flashing after the end" bug.
+6. ~~**Repeat-burn view**~~ ✅ (#8) a third mode on the same tap-the-handle gesture; 90 m burn
+   counts precomputed offline, 10,872 polygons. The rail carries repeat level (2×–9×) in that
+   mode instead of the year, so it still costs no new control.
+7. **Severity layer** — build the raster half of the pipeline so a parked animation can colour by
    MTBS severity, with a plain-language legend (shade loss / deadfall / canopy loss). Move to
    PMTiles at the same time.
-7. **Mobile** — the layout is desktop-first; panels are fixed-width and the popup needs a
+8. **Mobile** — the layout is desktop-first; panels are fixed-width and the popup needs a
    touch-friendly close target.
-8. **Pick the new name.**
+9. **Pick the new name.**
