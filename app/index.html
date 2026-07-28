@@ -888,11 +888,15 @@ async function showSeverity(id) {
   if (!fc) {
     try {
       fc = await loadGz(`data/severity/${encodeURIComponent(id)}.geojson.gz`);
+      sevCache.set(id, fc);            // only a real answer is worth keeping
     } catch (err) {
-      dlog(`no severity overlay for ${id}: ${err.message}`);
+      // A failure is not an answer. Caching it would turn one bad moment — an edge that has
+      // not got the file yet, a dropped connection — into a fire that silently has no severity
+      // for the rest of the session, however many times it is clicked. Leaving the cache empty
+      // means the next click tries again.
+      dlog(`severity fetch failed for ${id}, will retry: ${err.message}`);
       fc = NOTHING;
     }
-    sevCache.set(id, fc);
   }
   if (sevShown !== id) return;                     // something else was clicked while fetching
   map.getSource(SEV_SRC).setData(fc);
