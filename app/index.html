@@ -696,10 +696,21 @@ function paint() {
 
 // The one way the mode ever changes, whether it came from a button, the handle tap or `m`.
 function setMode(m) {
-  if (m === mode || !MODES.includes(m)) return;
+  if (!MODES.includes(m)) return;
+  // Choosing a view parks the run, like every other deliberate act here — a click on the map,
+  // a grab of the rail, a dropped track. Asking for one year and watching it keep marching
+  // through the others is not what the button says it does.
+  //
+  // This used to be `if (mode === 'repeat')`, which left the other two playing. The handle tap
+  // looked fine only by accident: the rail pauses in its own pointerdown, before this runs. So
+  // the same request behaved differently depending on which control you asked with, and the
+  // keyboard `m` matched neither. Pausing here is the one place that covers all three.
+  // The pause is *before* the "already on that view" check, not after: pressing All years
+  // during the opening run is a request to stop and look, even though the view does not change.
+  pause();
+  // (pause() also picks up the repeat asset and any unmeasured tracks, first time through)
+  if (m === mode) return;                            // nothing else to do; it is already on show
   mode = m;
-  if (mode === 'repeat') pause();     // a whole-record fact — there is nothing left to play
-  // (pause() also fetches the repeat asset if this is the first time it has been wanted)
   closePopup();                                      // it may describe a fire no longer drawn
   paint();
   moveHandle(railIdx());     // the rail just changed axis; re-place the handle on the new one
