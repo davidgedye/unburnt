@@ -13,8 +13,12 @@
        written across the bar. --hot-lit is the same brick lifted for marks drawn against the dark
        map rather than filled with it (chevrons, the inverted handle), which the deep tone alone
        would leave too dim to read. */
+    /* --trk is the one hue that isn't the map's: a viewer's own GPX track. Mint, because every
+       other slot is taken and it has to be unmistakable — the wildfire ramp owns warm,
+       prescribed fire owns purple, water and boundaries own blue-grey, and the land-cover
+       greens it might have collided with are near-black fills two orders of magnitude darker. */
     :root { --panel: rgba(16,20,27,.86); --ink: #c3ccd6; --dim: #99a6b1;
-            --hot: #a04a24; --hot-lit: #dd8055; }
+            --hot: #a04a24; --hot-lit: #dd8055; --trk: #5ef2a8; }
     html, body, #map { margin: 0; height: 100%; background: #0a0d12; }
     #map { position: absolute; inset: 0; }
     .panel {
@@ -76,6 +80,46 @@
       background: var(--hot); color: #fff3ec; text-shadow: 0 1px 2px rgba(0,0,0,.5);
     }
     #modes button:focus-visible { outline: 2px solid var(--hot-lit); outline-offset: 1px; }
+    /* --- Your own GPX tracks -----------------------------------------------------------
+       Deliberately quiet: this is the viewer's data, not the map's, so it gets a text button
+       rather than anything that competes with the three views above it. The row only exists
+       once a file has been read; before that there is just the one line offering it. */
+    #gpx { margin-top: 8px; }
+    #gpx-add {
+      display: block; width: 100%; padding: 3px 0; border: 0; background: none;
+      color: var(--dim); font: 500 11.5px/1.4 system-ui, sans-serif; text-align: left;
+      cursor: pointer; -webkit-tap-highlight-color: transparent;
+    }
+    #gpx-add:hover { color: #fff; }
+    #gpx-add:focus-visible { outline: 2px solid var(--hot-lit); outline-offset: 1px; }
+    .track {
+      display: flex; align-items: center; gap: 7px; padding: 2px 0;
+      font: 500 11.5px/1.4 system-ui, sans-serif; color: var(--ink);
+    }
+    /* A short length of the track's own line, so the panel row and the map read as one thing. */
+    .track i { flex: 0 0 auto; width: 11px; height: 2px; border-radius: 1px; background: var(--trk); }
+    /* The panel's width belongs to the stat row and the mode buttons. A track name is a label
+       that fits into what is already there — capped and ellipsised, never the thing that
+       resizes the app. Without the cap an 85-character name from some GPS unit pushes the
+       panel into the year handle on a phone. The full name is in the row's tooltip and in the
+       popup, so nothing is lost by trimming it here. */
+    .track .nm { flex: 1 1 0; min-width: 0; max-width: 132px; overflow: hidden;
+                 text-overflow: ellipsis; white-space: nowrap; }
+    .track .mi { flex: 0 0 auto; color: var(--dim); font: 500 11px/1.4 ui-monospace, monospace; }
+    .track button {
+      flex: 0 0 auto; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 3px;
+      background: none; color: var(--dim); font: 400 14px/1 system-ui, sans-serif;
+      cursor: pointer; -webkit-tap-highlight-color: transparent;
+    }
+    .track button:hover { color: #fff; background: rgba(255,255,255,.1); }
+    .track button:focus-visible { outline: 2px solid var(--hot-lit); outline-offset: 1px; }
+    /* The drop target is the whole window — there is no small rectangle to aim at. Shown only
+       while a file is actually over it. */
+    #drop { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
+            background: rgba(10,13,18,.55); backdrop-filter: blur(2px); }
+    #drop[hidden] { display: none; }
+    #drop-msg { position: static; padding: 18px 26px; font-size: 14px;
+                border: 1px dashed var(--trk); color: #fff; }
     #info-btn {
       float: right; margin: -1px 0 0 10px; width: 22px; height: 22px; border-radius: 50%;
       background: transparent; border: 1px solid rgba(255,255,255,.25); color: var(--ink);
@@ -197,11 +241,16 @@
     /* Same mid-tone as the prescribed-fire map ramp, so the popup's callout ties back to the
        purple fill the click came from. */
     .rx-tag { color: #b87fe0; font-weight: 600; }
+    /* The fires a track crosses, in the track's own mint, so the popup ties back to the line
+       the click came from the same way the prescribed-fire tag does. */
+    .trk-tag { color: var(--trk); font-weight: 600; }
   </style>
 </head>
 <body>
 <div id="map"></div>
 <div id="loading" class="panel">Loading fire history&hellip;</div>
+<!-- Only ever visible while a file is being dragged over the window. -->
+<div id="drop" hidden><div id="drop-msg" class="panel">Drop a GPX file to put your track on the map</div></div>
 
 <div id="title" class="panel">
   <!-- Title and stat in one block, so the open panel's flex column sees a heading and a body
@@ -214,6 +263,13 @@
       <button type="button" data-mode="all" aria-pressed="true">All years</button>
       <button type="button" data-mode="year" aria-pressed="false">One year</button>
       <button type="button" data-mode="repeat" aria-pressed="false">Repeats</button>
+    </div>
+    <!-- Your own tracks. Nothing here is uploaded: the file is read in the browser and stays
+         there, which is the whole answer to #11's question about server state. -->
+    <div id="gpx">
+      <div id="tracks"></div>
+      <button type="button" id="gpx-add">+ Add a GPX track</button>
+      <input type="file" id="gpx-file" accept=".gpx,application/gpx+xml" multiple hidden>
     </div>
   </div>
 
@@ -250,6 +306,21 @@
     <p>The last two or three stops describe so little ground that it is smaller than a pixel
        on a map of the whole West &mdash; the acreage beside the title is the honest measure
        of them. Zoom in and they are there.</p>
+
+    <h4>Your own tracks</h4>
+    <p>Drag a GPX file anywhere onto the map, or use <b>+ Add a GPX track</b> under the title,
+       and your route is drawn over the fire record in mint green. Several files at once is
+       fine, and a file holding several tracks becomes one entry each. Click a track to see how
+       long it is, how much of it has burned since 1984, and which fires did it &mdash; most
+       recent first.</p>
+    <p><b>Nothing is uploaded.</b> The file is read inside your browser and never leaves it:
+       there is no account, no server, and nowhere for anyone else to see where you walk. Your
+       tracks are remembered between visits by this browser alone, and the &times; beside a
+       track forgets it for good.</p>
+    <p>The burn figure is measured by stepping along the route about every 40&nbsp;m and asking
+       which mapped perimeters contain each step, so it inherits the same two caveats as the
+       repeat view: perimeters are simplified to roughly 200&nbsp;m, and being inside one means
+       a fire was mapped there, not that every acre of it burned.</p>
 
     <h4>Fire data</h4>
     <p><a href="https://www.mtbs.gov/" target="_blank" rel="noopener">MTBS</a> &mdash; Monitoring
@@ -737,7 +808,7 @@ function play() {
     if (yr !== idx) { show(yr); dlog(`${years[idx]}  (state ${idx + 1}/${N})`); }
     if (p >= N - 1) {
       raf = null; show(N - 1); syncURL();            // parked on the final year: now shareable
-      loadRepeats();                                 // the run is over; the thread is free
+      loadRepeats(); measurePending();               // the run is over; the thread is free
       dlog('DONE — final year shown, no further updates');
       return;
     }
@@ -745,7 +816,7 @@ function play() {
   };
   raf = requestAnimationFrame(frame);
 }
-function pause() { cancelAnimationFrame(raf); raf = null; loadRepeats(); }
+function pause() { cancelAnimationFrame(raf); raf = null; loadRepeats(); measurePending(); }
 
 // "1990-09-07" -> "7 September 1990".
 // The 'T00:00' matters: a bare "1990-09-07" is parsed as UTC and renders as the 6th anywhere
@@ -759,6 +830,328 @@ function longDate(iso) {
 // Removing the popup fires its close handler, which clears the outline — so this takes down
 // both. Safe to call when nothing is open.
 function closePopup() { if (popup) { popup.remove(); popup = null; } }
+
+// Track names and fire names both end up inside a popup's HTML, and a track name came out of
+// a file someone else may have written.
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Anchored where you clicked rather than at the middle of the track: on a route that crosses
+// three states, "the middle" is nowhere in particular, and the point you pressed is the point
+// you were asking about.
+function showTrackPopup(feature, lngLat) {
+  const p = feature.properties;
+  // Same shape as a fire's popup — a line each, in the order you'd ask: what, how long, how
+  // much of it has burned, and which fires did it.
+  const burnt = p.pct > 0 ? `${p.pct}% burned since 1984` : 'no mapped fire since 1984';
+  const which = p.burned ? `<br><span class="trk-tag">${esc(p.burned)}</span>` : '';
+  popup = new maplibregl.Popup({ anchor: 'bottom', offset: GAP }).setLngLat(lngLat)
+    .setHTML(`<b>${esc(p.name)}</b><br>${p.miles.toFixed(1)} miles<br>${burnt}${which}`)
+    .addTo(map);
+}
+
+// ---------------------------------------------------------------------------
+// GPX tracks (#11) — your own routes, drawn over the fire record.
+//
+// **No server, and no per-user data anywhere but your own browser.** The file is read with
+// FileReader and parsed here; nothing is uploaded, there is no account, and the app stays a
+// bucket of static files with no Worker script behind it. Tracks are kept in localStorage so
+// a reload doesn't lose them, which is the only storage involved and is still yours alone.
+//
+// This is also the one place the app does real geometry at runtime. That is not a break with
+// the "no runtime geometry" rule, which is about the animation's per-frame paint: this runs
+// once, when a file is dropped, in the same class as the initial data load.
+// ---------------------------------------------------------------------------
+const TRACK_SRC = 'tracks', TRACK_LAYER = 'track-line', TRACK_CASE = 'track-case';
+const STORE_KEY = 'unburnt.tracks.v1';
+const MI_PER_DEG = 69.0525;                  // latitude degrees to statute miles
+const SAMPLE_MI = 0.025;                     // ~40 m between burn-test samples along a track
+const MAX_SAMPLES = 40000;                   // a bound on the work any one file can ask for
+let tracks = [], nextTid = 1;
+
+// Great-circle distance in miles, good to a fraction of a percent at these scales.
+function milesBetween([x1, y1], [x2, y2]) {
+  const dy = (y2 - y1) * MI_PER_DEG;
+  const dx = (x2 - x1) * MI_PER_DEG * Math.cos((y1 + y2) / 2 * Math.PI / 180);
+  return Math.hypot(dx, dy);
+}
+const segMiles = seg => seg.reduce((d, p, i) => i ? d + milesBetween(seg[i - 1], p) : 0, 0);
+
+// GPX is XML with a default namespace, and 1.0 and 1.1 use different ones — matching on the
+// local tag name rather than the namespace reads both without caring which.
+function localName(el) { return el.tagName.replace(/^.*:/, ''); }
+function childText(el, tag) {
+  for (const c of el.children) if (localName(c) === tag) return c.textContent.trim();
+  return '';
+}
+function ptsFrom(el, tag) {
+  return [...el.getElementsByTagName('*')]
+    .filter(n => localName(n) === tag)
+    .map(n => [+n.getAttribute('lon'), +n.getAttribute('lat')])
+    .filter(c => Number.isFinite(c[0]) && Number.isFinite(c[1]) &&
+                 Math.abs(c[0]) <= 180 && Math.abs(c[1]) <= 90);
+}
+
+// One GPX file can hold several tracks and several routes; each becomes its own entry, so
+// removing one doesn't take the rest with it. Waypoints are ignored — this is about lines.
+function parseGPX(text, fallbackName) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error('not valid XML');
+  const all = [...doc.getElementsByTagName('*')];
+  const out = [];
+  for (const trk of all.filter(n => localName(n) === 'trk')) {
+    const segs = [...trk.getElementsByTagName('*')]
+      .filter(n => localName(n) === 'trkseg')
+      .map(seg => ptsFrom(seg, 'trkpt'))
+      .filter(s => s.length > 1);
+    if (segs.length) out.push({ name: childText(trk, 'name') || fallbackName, segs });
+  }
+  for (const rte of all.filter(n => localName(n) === 'rte')) {
+    const line = ptsFrom(rte, 'rtept');
+    if (line.length > 1) out.push({ name: childText(rte, 'name') || fallbackName, segs: [line] });
+  }
+  if (!out.length) throw new Error('no tracks or routes in the file');
+  return out;
+}
+
+// --- What has this route been through? --------------------------------------
+// Walk the track at an even spacing and ask, for each step, which mapped fires contain it.
+// Even spacing rather than per-vertex: GPX vertices are laid down by time, so a track that
+// paused at a viewpoint would otherwise weight that spot hundreds of times over.
+function* samples(segs, step) {
+  let budget = MAX_SAMPLES;
+  for (const seg of segs) {
+    let carry = 0;
+    yield seg[0];
+    for (let i = 1; i < seg.length && budget > 0; i++) {
+      const a = seg[i - 1], b = seg[i];
+      const len = milesBetween(a, b);
+      for (let d = step - carry; d < len && budget > 0; d += step, budget--) {
+        const t = d / len;
+        yield [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      }
+      carry = (carry + len) % step;
+    }
+  }
+}
+
+// A grid of fire bounding boxes, built once on the first track added. Without it every sample
+// would test 11,377 polygons; with it, a handful.
+let fireGrid = null;
+function buildFireGrid() {
+  if (fireGrid) return fireGrid;
+  const CELL = 0.25, grid = new Map(), bbox = [];
+  fires.forEach((f, i) => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const visit = c => {
+      if (typeof c[0] === 'number') {
+        if (c[0] < x0) x0 = c[0];
+        if (c[0] > x1) x1 = c[0];
+        if (c[1] < y0) y0 = c[1];
+        if (c[1] > y1) y1 = c[1];
+      } else for (const p of c) visit(p);
+    };
+    visit(f.geometry.coordinates);
+    bbox[i] = [x0, y0, x1, y1];
+    for (let gx = Math.floor(x0 / CELL); gx <= Math.floor(x1 / CELL); gx++)
+      for (let gy = Math.floor(y0 / CELL); gy <= Math.floor(y1 / CELL); gy++) {
+        const k = gx + ':' + gy;
+        if (!grid.has(k)) grid.set(k, []);
+        grid.get(k).push(i);
+      }
+  });
+  fireGrid = { CELL, grid, bbox };
+  dlog(`fire grid: ${grid.size} cells`);
+  return fireGrid;
+}
+
+// Ray casting. A polygon's first ring is its outside and the rest are holes, so a point in a
+// hole — an island the fire burned around — is correctly not inside.
+function inRing(x, y, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function inPolygon(x, y, rings) {
+  if (!inRing(x, y, rings[0])) return false;
+  for (let k = 1; k < rings.length; k++) if (inRing(x, y, rings[k])) return false;
+  return true;
+}
+function inGeometry(x, y, g) {
+  if (g.type === 'Polygon') return inPolygon(x, y, g.coordinates);
+  for (const rings of g.coordinates) if (inPolygon(x, y, rings)) return true;
+  return false;
+}
+
+function burnHistory(segs) {
+  const { CELL, grid, bbox } = buildFireGrid();
+  const hit = new Set();
+  let burned = 0, total = 0;
+  for (const [x, y] of samples(segs, SAMPLE_MI)) {
+    total++;
+    const cands = grid.get(Math.floor(x / CELL) + ':' + Math.floor(y / CELL));
+    if (!cands) continue;
+    let any = false;
+    for (const i of cands) {
+      const b = bbox[i];
+      if (x < b[0] || x > b[2] || y < b[1] || y > b[3]) continue;
+      if (inGeometry(x, y, fires[i].geometry)) { hit.add(i); any = true; }
+    }
+    if (any) burned++;
+  }
+  // Most recent first: on a fire map the last time this ground burned is the headline.
+  const named = [...hit].map(i => fires[i].properties)
+    .sort((a, b) => b.year - a.year);
+  return { pct: total ? burned / total : 0, fires: named, total };
+}
+
+// --- Adding, drawing and remembering ----------------------------------------
+function trackFeatures() {
+  return {
+    type: 'FeatureCollection',
+    features: tracks.map(t => ({
+      type: 'Feature',
+      properties: { kind: 'track', tid: t.tid, name: t.name, miles: t.miles,
+                    pct: t.pct, burned: t.burned },
+      geometry: { type: 'MultiLineString', coordinates: t.segs }
+    }))
+  };
+}
+
+function drawTracks() {
+  map.getSource(TRACK_SRC)?.setData(trackFeatures());
+  renderTrackList();
+  saveTracks();
+}
+
+function renderTrackList() {
+  const box = document.getElementById('tracks');
+  box.innerHTML = '';
+  for (const t of tracks) {
+    const row = document.createElement('div');
+    row.className = 'track';
+    row.innerHTML = `<i></i><span class="nm"></span><span class="mi">${t.miles.toFixed(1)} mi</span>`;
+    row.querySelector('.nm').textContent = t.name;     // never as HTML: it came from a file
+    row.querySelector('.nm').title = t.name;
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.textContent = '×';
+    x.setAttribute('aria-label', 'Remove ' + t.name);
+    x.addEventListener('click', () => {
+      tracks = tracks.filter(o => o.tid !== t.tid);
+      closePopup();
+      drawTracks();
+    });
+    row.appendChild(x);
+    box.appendChild(row);
+  }
+}
+
+// Rounded to 5 decimals (~1 m) — far finer than a GPS fix, and it roughly halves what goes
+// into storage. If the quota is blown, the tracks still work for this session; only the
+// remembering is lost, so it fails quietly rather than taking the feature down with it.
+function saveTracks() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(tracks.map(t => ({
+      name: t.name,
+      segs: t.segs.map(s => s.map(([x, y]) => [+x.toFixed(5), +y.toFixed(5)]))
+    }))));
+  } catch (err) {
+    dlog('tracks not saved: ' + err.message);
+  }
+}
+
+// Measuring a track costs ~100 ms the first time, because that is when the fire grid gets
+// built. Same rule as the repeat asset: never while the animation is running. A dropped file
+// pauses first (see addFiles), so in practice this only defers tracks restored at load — the
+// lines go up immediately and the burn history fills in when the run stops.
+let unmeasured = [];
+function measure(t) {
+  const t0 = performance.now();
+  const { pct, fires: crossed } = burnHistory(t.segs);
+  const top = crossed.slice(0, 3).map(p => `${p.name} ${p.year}`).join(', ');
+  const more = crossed.length - 3;
+  t.pct = Math.round(pct * 100);
+  t.burned = crossed.length ? top + (more > 0 ? `, +${more} more` : '') : '';
+  dlog(`track "${t.name}": ${t.miles.toFixed(1)} mi, ${t.pct}% burned, ` +
+       `${crossed.length} fires, ${Math.round(performance.now() - t0)} ms`);
+}
+function measurePending() {
+  if (!unmeasured.length) return;
+  for (const t of unmeasured) measure(t);
+  unmeasured = [];
+  drawTracks();                                    // the properties just changed
+}
+
+function addTrack(name, segs) {
+  const t = { tid: nextTid++, name, segs, pct: 0, burned: '',
+              miles: segs.reduce((m, s) => m + segMiles(s), 0) };
+  tracks.push(t);
+  if (raf) unmeasured.push(t); else measure(t);
+  return t;
+}
+
+// The overlay does double duty: the invitation while a file is over the window, and where the
+// answer appears if the file turns out not to be readable. Somebody who drags a file onto a map
+// and gets silence has been told nothing; the console is not where they are looking.
+const DROP_PROMPT = 'Drop a GPX file to put your track on the map';
+let dropTimer = null;
+function flashDrop(msg) {
+  const el = document.getElementById('drop');
+  document.getElementById('drop-msg').textContent = msg;
+  el.hidden = false;
+  clearTimeout(dropTimer);
+  dropTimer = setTimeout(() => {
+    el.hidden = true;
+    document.getElementById('drop-msg').textContent = DROP_PROMPT;
+  }, 4000);
+}
+
+async function addFiles(files) {
+  const all = [...files];
+  if (!all.length) return;
+  // Dropping a file is a deliberate act, like clicking the map or grabbing the rail, and it is
+  // about to move the camera to what you dropped — so it parks the animation rather than
+  // fighting it. It also means the burn history is measured straight away.
+  pause();
+  const gpx = all.filter(f => /\.gpx$/i.test(f.name));
+  if (!gpx.length) return flashDrop('Tracks have to be .gpx files.');
+  const failed = [];
+  let added = 0;
+  for (const file of gpx) {
+    try {
+      const base = file.name.replace(/\.gpx$/i, '');
+      for (const t of parseGPX(await file.text(), base)) { addTrack(t.name, t.segs); added++; }
+    } catch (err) {
+      failed.push(`${file.name} — ${err.message}`);
+      console.error(`GPX "${file.name}" could not be read:`, err);
+    }
+  }
+  if (failed.length) flashDrop('Could not read ' + failed.join('; '));
+  if (!added) return;
+  drawTracks();
+  // Frame what was just added, so a track dropped while looking at Montana doesn't land
+  // silently off screen.
+  const last = tracks[tracks.length - 1];
+  const b = new maplibregl.LngLatBounds();
+  for (const s of last.segs) for (const c of s) b.extend(c);
+  map.fitBounds(b, { padding: 80, maxZoom: 13, duration: 700 });
+}
+
+function restoreTracks() {
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || '[]'); } catch { return; }
+  if (!Array.isArray(saved) || !saved.length) return;
+  for (const t of saved) {
+    if (t && typeof t.name === 'string' && Array.isArray(t.segs) && t.segs.length) {
+      addTrack(t.name, t.segs);
+    }
+  }
+  if (tracks.length) { drawTracks(); dlog(`${tracks.length} track(s) restored from this browser`); }
+}
 
 // --- Shareable view state --------------------------------------------------
 // The camera and the parked year are mirrored into the query string, so any view can be copied
@@ -824,6 +1217,37 @@ function wireControls() {
   // the layers exist, and setMode() repaints.
   modeBtns.forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 
+  // --- GPX in ---------------------------------------------------------------
+  // Two ways in, because a drop target nobody can see is a feature nobody finds: the button in
+  // the panel says the feature exists, and dragging a file anywhere over the window works once
+  // you know. Both end in the same addFiles().
+  const fileInput = document.getElementById('gpx-file');
+  document.getElementById('gpx-add').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+
+  const dropEl = document.getElementById('drop');
+  // dragenter/dragleave fire for every element the pointer crosses, so a naive pair flickers
+  // the overlay on and off across the whole page. Counting them is the standard fix.
+  let dragDepth = 0;
+  const isFileDrag = e => [...(e.dataTransfer?.types || [])].includes('Files');
+  addEventListener('dragenter', e => {
+    if (!isFileDrag(e)) return;
+    if (++dragDepth === 1) {
+      clearTimeout(dropTimer);                       // a new file supersedes any error showing
+      document.getElementById('drop-msg').textContent = DROP_PROMPT;
+      dropEl.hidden = false;
+    }
+  });
+  addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; dropEl.hidden = true; } });
+  // Without preventDefault on dragover the browser navigates to the dropped file instead.
+  addEventListener('dragover', e => { if (isFileDrag(e)) e.preventDefault(); });
+  addEventListener('drop', e => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    dragDepth = 0; dropEl.hidden = true;
+    addFiles(e.dataTransfer.files);
+  });
+
   const queryLayers = layers.concat(rxLayers);   // both hues are clickable/hoverable alike
   // Whatever is actually drawn is what answers a click: the year layers on the timeline, the
   // repeat counts in repeat mode (where the year layers are a backdrop, not the subject).
@@ -831,11 +1255,14 @@ function wireControls() {
   // list. The rings go in too: at low zoom a small patch is all ring and no fill, and it would
   // otherwise be the one thing on screen that cannot be clicked.
   const repQuery = repLayers.filter(Boolean).concat(repRings.filter(Boolean));
-  const hitLayers = () => mode === 'repeat' ? repQuery : queryLayers;
+  // Your tracks answer a click in every view — they are the one thing on the map that isn't
+  // the map's, and nothing about the year or the level should ever make them unclickable.
+  const hitLayers = () => [TRACK_LAYER].concat(mode === 'repeat' ? repQuery : queryLayers);
   // A layer at zero opacity is still queryable, so what is actually *shown* has to be restated
   // here: years not yet reached on the timeline, counts under the rail's floor in repeat mode.
-  const shown = f => mode === 'repeat' ? f.properties.count >= levels[lvl]
-                                       : f.properties.year <= years[idx];
+  const shown = f => f.properties.kind === 'track' ? true
+                   : mode === 'repeat' ? f.properties.count >= levels[lvl]
+                   : f.properties.year <= years[idx];
   // Dragging anywhere in the rail scrubs. Pointer capture keeps the drag alive when the finger
   // or cursor wanders off the 56px strip, which on a phone it constantly does.
   const r = rail();
@@ -922,6 +1349,9 @@ function wireControls() {
     syncURL();                                       // a click parks the year — record it
     const rep = mode === 'repeat';
     const hits = map.queryRenderedFeatures(e.point, { layers: hitLayers() }).filter(shown);
+    // A track is drawn over everything, so a click that lands on one is about the track.
+    const trk = hits.find(f => f.properties.kind === 'track');
+    if (trk) { closePopup(); showTrackPopup(trk, e.lngLat); return; }
     // Close first: removing a popup fires its close handler, which clears the outline. Doing it
     // before the new one is drawn stops the old handler wiping the new selection.
     closePopup();
@@ -1093,6 +1523,24 @@ Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([f
     paint: { 'line-color': '#fff2b0', 'line-width': 2, 'line-opacity': 0.95 }
   });
 
+  // Your own tracks, on top of everything — including the selection outline. Nothing the map
+  // is showing should ever hide the line you brought to it. Two layers: a dark casing under a
+  // mint line, the usual way of keeping a route legible whatever it crosses, and here it has
+  // to survive both the near-black ground and the brightest part of the fire ramp.
+  map.addSource(TRACK_SRC, { type: 'geojson', data: NOTHING });
+  map.addLayer({
+    id: TRACK_CASE, type: 'line', source: TRACK_SRC,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#08120c', 'line-opacity': 0.85,
+             'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3.4, 10, 5.5, 16, 8] }
+  });
+  map.addLayer({
+    id: TRACK_LAYER, type: 'line', source: TRACK_SRC,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#5ef2a8',
+             'line-width': ['interpolate', ['linear'], ['zoom'], 4, 1.4, 10, 2.4, 16, 4] }
+  });
+
   peakAcres = Math.max(...acresByYear) || 1;
   wireControls();
   dlog(`${fc.features.length} fires, ${N} yearly states, ${layers.length + rxLayers.length} layers`);
@@ -1105,6 +1553,7 @@ Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([f
   else if (jump >= 0) snapTo(jump);
   else { snapTo(0); play(); }
   if (!raf) loadRepeats();       // nothing is playing, so nothing is there to interrupt
+  restoreTracks();               // whatever this browser was carrying from last time
 }).catch(err => {
   // The one fetch nothing else can work without — leave the message on screen rather than
   // hiding it, and say so plainly instead of leaving a spinner running forever.

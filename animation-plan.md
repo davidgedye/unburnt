@@ -387,6 +387,37 @@ counting on the severity mosaics rather than the perimeters, which is the milest
 3. **Base map:** Protomaps 11-state extract → R2 (replacing OpenFreeMap), which also lifts the
    z14 detail ceiling.
 
+## GPX tracks — ✅ built (#11)
+
+Drag a `.gpx` onto the map, or use **+ Add a GPX track** in the panel, and the route is drawn
+over the fire record in mint — the one hue nothing else owns, now that prescribed fire has
+purple and the wildfire ramp owns warm. Several files at once, and a file holding several
+`trk`/`rte` elements becomes one entry each, so removing one doesn't take the rest.
+
+**The answer to the issue's own question is that there is no server.** The file is read with
+`FileReader`, parsed with `DOMParser` in the page, and never leaves the browser: no account, no
+database, no Worker script, and the deploy stays a directory of static files. Tracks persist in
+`localStorage` (coordinates rounded to 5 dp, ~1 m) so a reload keeps them; if the quota is
+blown, persistence is dropped silently and the tracks still work for the session.
+
+**Click a track and it says what it has been through** — length, the share of it that has burned
+since 1984, and the fires that did it, most recent first. That is the reason to put a route on
+*this* map rather than any other. It is measured by stepping along the track every ~40 m and
+testing each step against the fire perimeters, point-in-polygon, with holes respected so an
+unburned island inside a perimeter counts as unburned. A grid of fire bounding boxes (0.25°,
+3,786 cells, built once on the first track) turns 11,377 candidate polygons into a handful.
+
+This is the only place the app does real geometry at runtime, and it does **not** break the
+no-runtime-geometry rule, which is about the animation's per-frame paint. It is the same class
+of work as the initial data load — and it obeys the same rule the repeat asset does: measuring
+costs ~100 ms the first time (that is the grid being built), so it never runs while the
+animation is playing. A dropped file pauses the run first, the way a click or a rail grab does;
+tracks restored at load are drawn immediately and measured when the run ends.
+
+Two caveats it inherits from the perimeter data, both stated in the About panel: perimeters are
+simplified to ~200 m, and "burned" means "inside a mapped perimeter", which the severity mosaics
+put at about 84% actually burned.
+
 ## Data caveats (still true)
 
 - **Provisional tail (mosaic lag ~2 yr):** severity mosaics are complete only through ~2023;
@@ -418,4 +449,6 @@ counting on the severity mosaics rather than the perimeters, which is the milest
    PMTiles at the same time.
 8. **Mobile** — the layout is desktop-first; panels are fixed-width and the popup needs a
    touch-friendly close target.
-9. **Pick the new name.**
+9. ~~**GPX tracks**~~ ✅ (#11) drop your own route on the fire record; parsed and kept entirely
+   in the browser, so the answer to "server state and per-user data" is that there is none.
+10. **Pick the new name.**

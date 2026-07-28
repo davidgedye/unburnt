@@ -41,6 +41,12 @@ Working app covering **all 11 Western states, 1984–2024** — see `app/`:
   that has burned that many times *or more*. A click parks the animation on the year it is
   showing and names the fire you clicked; pan and zoom work at all times, playing or paused.
 
+- **Your own GPX tracks** — drag a `.gpx` file onto the map (or use the button in the panel)
+  and the route is drawn over the fire record, with a click reporting how much of it has burned
+  since 1984 and which fires did it. **Nothing is uploaded**: the file is parsed in the browser
+  and stays there, remembered only by that browser's `localStorage`. This is what keeps the app
+  a static asset deploy with no Worker script, no database and no accounts (#11).
+
 Run it locally: `npm run dev` (or `python3 serve.py`) → `http://localhost:8090/index.html`
 (URL params: `?data=west|wa`, `?lng=&lat=&z=`, `?year=1995`, `?mode=year|repeat`, `?level=4`,
 `?debug=1`).
@@ -84,6 +90,11 @@ exist for all 41 years on ScienceBase, but the newest 1–2 are substantively in
   layers, so swapping it later is a base-style-only change.
 - **Efficiency is a requirement, not a polish item:** the animation must run on phones while
   showing every fire in the 11 Western states (11,377 perimeters, 1984–2024).
+- **No server-side state, and no per-user data.** #11 asked for GPX upload and flagged what
+  that usually drags in. It doesn't here: the file is read with `FileReader`, parsed in the
+  page, and never sent anywhere. Tracks persist in `localStorage`, which is the user's own
+  browser and nobody else's. No accounts, no database, no Worker script — the deploy stays a
+  directory of static files.
 - **Platform:** Cloudflare — Pages/Workers static assets for the frontend, R2 for PMTiles.
   Fire metadata as static build-time JSON; D1 deferred.
 - **Tile format:** vector PMTiles on R2, read directly by MapLibre via HTTP range requests —
