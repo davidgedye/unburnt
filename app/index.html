@@ -118,6 +118,18 @@
       background: #150a02; color: var(--hot-lit);
       box-shadow: 0 0 0 2px var(--hot-lit), 0 4px 14px rgba(0,0,0,.55);
     }
+    /* Shown until the fire data and the basemap are both ready — the animation is gated on the
+       same two things (see the Promise.all at the bottom), so this is the whole of the wait.
+       Centred over the map rather than tucked in the title: on a slow connection that is the
+       one place someone's eyes are already on, watching an empty basemap for several seconds. */
+    #loading {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      padding: 14px 20px; font-size: 14px; text-align: center;
+      animation: loading-pulse 1.6s ease-in-out infinite;
+      transition: opacity .3s ease;
+    }
+    #loading.gone { opacity: 0; pointer-events: none; animation: none; }
+    @keyframes loading-pulse { 50% { opacity: .55; } }
     /* MapLibre ships compact attribution but also adds -show, which forces the text open.
        Override that: collapse to just the (i), and reveal on hover or click (<details open>). */
     .maplibregl-ctrl-attrib.maplibregl-compact-show { padding: 2px 24px 2px 0; }
@@ -138,6 +150,7 @@
 </head>
 <body>
 <div id="map"></div>
+<div id="loading" class="panel">Loading fire history&hellip;</div>
 
 <div id="title" class="panel">
   <!-- Title and stat in one block, so the open panel's flex column sees a heading and a body
@@ -916,6 +929,7 @@ function loadRepeats() {
 }
 
 Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([fc]) => {
+  document.getElementById('loading').classList.add('gone');
   const seen = new Set();
   fc.features.forEach((f, i) => {
     f.properties.year = +f.properties.ig_date.slice(0, 4);
@@ -1016,6 +1030,13 @@ Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([f
   else if (jump >= 0) snapTo(jump);
   else { snapTo(0); play(); }
   if (!raf) loadRepeats();       // nothing is playing, so nothing is there to interrupt
+}).catch(err => {
+  // The one fetch nothing else can work without — leave the message on screen rather than
+  // hiding it, and say so plainly instead of leaving a spinner running forever.
+  const el = document.getElementById('loading');
+  el.textContent = "Couldn't load fire data — check your connection and reload.";
+  el.style.animation = 'none';
+  console.error('FIRE DATA LOAD FAILED:', err);
 });
 </script>
 </body>
