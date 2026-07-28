@@ -13,7 +13,14 @@ Two fields per fire, both small enough to ride on the dataset the app already lo
 Percentages are of *mapped* pixels: class 6 (non-processing mask) and unmapped ground are left
 out of the denominator, so "62% high" means 62% of what MTBS actually assessed.
 
-Usage: attach-severity.py <in.geojson> <out.geojson.gz>
+Two modes:
+  attach-severity.py <in.geojson> <out.geojson.gz>
+      the shipped path — reads the global stats file and the per-fire overlay directory, and
+      writes a gzipped dataset for the app.
+  attach-severity.py --inplace <perims.geojson> <stats.json>
+      the tiling path (build-pmtiles-all.sh) — one year at a time, with that year's stats, and
+      "has an overlay" means "this fire produced severity polygons" because in a tileset there
+      are no per-fire files to look for. Rewrites the GeoJSON in place, before tippecanoe.
 """
 import gzip, json, os, sys
 
@@ -55,8 +62,32 @@ def main(src, dst):
     print(f'  wrote {dst} ({os.path.getsize(dst) / 1e6:.2f} MB)')
 
 
+def inplace(perims_path, stats_path):
+    """One year's perimeters, tagged from that year's severity stats, rewritten in place."""
+    stats = json.load(open(stats_path)) if os.path.exists(stats_path) else {}
+    fc = json.load(open(perims_path))
+    n_ok = 0
+    for feat in fc['features']:
+        p = feat['properties']
+        counts = stats.get(p.get('id'))
+        # In a tileset there is no per-fire file to check for, so "has severity" is decided by
+        # whether any drawable class came back for this fire — which is the same question.
+        mapped = sum(v for k, v in (counts or {}).items() if int(k) in CLASSES)
+        p['sev_ok'] = bool(mapped)
+        if mapped:
+            n_ok += 1
+            p['sev'] = [round(counts.get(str(c), counts.get(c, 0)) * 100 / mapped)
+                        for c in CLASSES]
+    with open(perims_path, 'w') as fh:
+        json.dump(fc, fh, separators=(',', ':'))
+    print(f'   {n_ok}/{len(fc["features"])} fires tagged with severity')
+
+
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        print(__doc__.strip().splitlines()[-1])
+    if len(sys.argv) == 4 and sys.argv[1] == '--inplace':
+        inplace(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) == 3:
+        main(sys.argv[1], sys.argv[2])
+    else:
+        print(__doc__.strip())
         sys.exit(2)
-    main(sys.argv[1], sys.argv[2])

@@ -128,6 +128,39 @@ Worker script**. Python's stock `http.server` answers 200 to a Range request and
 - **Build cost**: ~4 min of tiling per year plus severity extraction, ~1.3 GB peak RAM, and the
   mosaics have to be re-downloaded (~200 MB) since the severity build deletes them.
 
+## The full build — `pipeline/build-pmtiles-all.sh`
+
+Written and tested end to end on 2023 + 2024 (resume, per-year build, multi-year merge, and
+rendering the merged tileset). Per year: fetch the mosaic → perimeters at full fidelity →
+severity at full fidelity → tag the perimeters with `sev_ok`/`sev` → two tippecanoe runs →
+`tile-join` into one year tileset → delete everything transient. Then merge all years in
+batches of eight.
+
+Two tilesets per year because the layers want different minzooms and tippecanoe takes one per
+run:
+
+- **perimeters from z2**, because the app's `minzoom` is 2.5 and a source has no tiles below its
+  own minzoom — fires would simply vanish on a small window. With `--no-tile-size-limit`:
+  dropping features to fit a tile would silently delete fires from the accumulated view, which
+  is the one thing this map must not do.
+- **severity from z9**, so a regional view cannot fetch something that is far below a pixel.
+
+Resumable: a finished year is skipped, each tileset is written under a temporary name and
+renamed only on success, and a kill loses at most the year in flight.
+
+### Two bugs the end-to-end test caught
+
+1. **`tile-join` has no `-q`.** It is not in the usage string, and the unrecognised flag gets
+   taken as an input filename — which surfaces as `pmtiles_magic_number_exception`, pointing at
+   the data rather than the flag.
+2. **`tile-join` picks its output format from the file extension.** The write-to-temp-then-rename
+   safety pattern used `2024.tmp`, which produced an *mbtiles* that was then renamed to
+   `.pmtiles`: a plausible-looking file with the wrong magic number, and the failure only shows
+   up much later at merge time. The temporary name has to keep the `.pmtiles` extension.
+
+Measured on 2024 (89 of 299 fires have severity) and 2023 (259 of 272): **~60 s per year** with
+the mosaic already local, 14–16 MB per year tileset.
+
 ## Migration notes
 
 - The animation engine survives unchanged: one layer per year with a **static** filter works the

@@ -45,7 +45,7 @@
 // fidelity the shipped GeoJSON has to throw away. tippecanoe generalises per zoom level, so
 // z4 gets a coarse version and z13 gets everything — which is the whole argument for moving
 // off whole-file GeoJSON. Nothing here touches the app.
-const PM = 'http://localhost:8082/data/pmtiles/2020.pmtiles';   // read by byte range, as from R2
+const PM = 'http://localhost:8082/data/pmtiles/west.pmtiles';   // read by byte range, as from R2
 maplibregl.addProtocol('pmtiles', new pmtiles.Protocol().tile);
 
 const OFM = 'https://tiles.openfreemap.org';

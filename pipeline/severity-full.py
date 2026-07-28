@@ -150,8 +150,12 @@ def round_coords(c):
     return [round_coords(p) for p in c]
 
 
-def build_year_single(year, perims, out_path):
-    """All of one year's severity polygons in a single file, each tagged with its fire id."""
+def build_year_single(year, perims, out_path, stats_path=None):
+    """All of one year's severity polygons in a single file, each tagged with its fire id.
+
+    Also writes the per-fire class pixel counts, which is what tells the perimeter layer which
+    fires have severity at all — the flag the One-year outline is drawn from.
+    """
     path = os.path.join(ROOT, f'pipeline/data/mosaic{year}/mtbs_CONUS_{year}.tif')
     mosaic = gdal.Open(path)
     gt = mosaic.GetGeoTransform()
@@ -170,6 +174,7 @@ def build_year_single(year, perims, out_path):
     perims.ResetReading()
 
     feats = []
+    stats = {}
     fires = 0
     t0 = time.time()
     for feat in perims:
@@ -177,6 +182,8 @@ def build_year_single(year, perims, out_path):
         geom = feat.GetGeometryRef().Clone()
         geom.Transform(to_mosaic)
         fc, counts = fire_severity(mosaic, gt, inv_gt, srs_wkt, geom, to_wgs)
+        if counts:
+            stats[fid] = counts
         if not fc or not fc['features']:
             continue
         fires += 1
@@ -185,6 +192,9 @@ def build_year_single(year, perims, out_path):
             feats.append(f)
     with open(out_path, 'w') as fh:
         json.dump({'type': 'FeatureCollection', 'features': feats}, fh, separators=(',', ':'))
+    if stats_path:
+        with open(stats_path, 'w') as fh:
+            json.dump(stats, fh, separators=(',', ':'))
     v = sum(len(r) for f in feats
             for part in ([f['geometry']['coordinates']] if f['geometry']['type'] == 'Polygon'
                          else f['geometry']['coordinates']) for r in part)
@@ -194,5 +204,6 @@ def build_year_single(year, perims, out_path):
 
 if __name__ == '__main__':
     year, out = sys.argv[1], sys.argv[2]
+    stats_path = sys.argv[3] if len(sys.argv) > 3 else None
     ds = ogr.Open(PERIMS)
-    build_year_single(year, ds.GetLayer(0), out)
+    build_year_single(year, ds.GetLayer(0), out, stats_path)
