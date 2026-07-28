@@ -30,7 +30,8 @@ Working app covering **all 11 Western states, 1984–2024** — see `app/`:
 - **Base map:** bland dark vector base (OpenFreeMap) that scales — state boundaries, coastline
   and interstates at overview zoom; cities, then villages/hamlets, rivers, streams, forest and
   park shading, road tiers and buildings as you zoom in. No user-facing toggles: these are
-  styling decisions.
+  styling decisions. A hairline **scale bar** sits bottom-left — the only thing drawn over the
+  map that isn't data, and it takes no pointer events.
 - **Animation:** **41 yearly states, 0.75 s each (~31 s)**, playing on load. The year rail down
   the right edge scrubs and snaps to whole years; grabbing it is the pause.
 - **Three views**, named in the title panel — *All years* (every year up to the one on show,

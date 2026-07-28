@@ -49,7 +49,8 @@ There is no animation/explore split. The map is always live:
 **Three views, named in the title panel.** A segmented control under the stat row — *All years
 / One year / Repeats* — with the active one wearing `--hot`, the same brick as the handle and
 the bar. It sits there because choosing *Repeats* rewrites the stat row directly above it, and
-because the app's position is one panel and no on-map controls. Tapping the rail's handle still
+because the app's position is one panel and nothing pressable on the map itself (the scale bar
+bottom-left is the sole on-map element, and it takes no pointer events). Tapping the handle still
 cycles the same three (and `m` still works): the buttons teach that gesture rather than
 replacing it. Every path goes through one `setMode()`, so none of them can leave the buttons
 out of step with the map.
@@ -103,6 +104,9 @@ MapLibre GL JS, composed of independent, individually-styleable layers. Detail t
   extract of the 11 Western states** on R2, same PMTiles-on-R2 serving as the fire data.
 - **Coastline** is an explicit stroke, so the land/water edge reads as clearly as state lines.
 - **No user-facing layer toggles** — these are styling decisions, not user choices.
+- **A scale bar, bottom-left** — a hairline with end ticks and the distance in miles, no box and
+  no pointer events. The one thing on the map that isn't data: with a zoom range from a continent
+  to a hillside there is otherwise no way to read distance off it.
 - **Satellite removed.** It was wired up but never used; re-add as a raster source + layer when
   wanted (Esri World Imagery / USGS Imagery are both free and keyless).
 - **Base tiles stop at z14.** Past that the base is stretched, not resampled — inherent to

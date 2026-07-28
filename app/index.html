@@ -161,6 +161,32 @@
     .maplibregl-ctrl-attrib.maplibregl-compact[open] .maplibregl-ctrl-attrib-inner { display: block; }
     .maplibregl-ctrl-attrib.maplibregl-compact:hover,
     .maplibregl-ctrl-attrib.maplibregl-compact[open] { padding: 2px 28px 2px 8px; }
+    /* Scale, bottom-left — the one corner with nothing in it. Stripped back to a hairline with
+       a tick at each end and the distance sitting above it: no box, no fill, nothing that reads
+       as a widget bolted onto the map. MapLibre picks the round number and the pixel width; all
+       of this is presentation. Miles, the same unit family as the acreages everywhere else. */
+    .maplibregl-ctrl-scale {
+      position: relative;
+      background: none; border: none; border-bottom: 1px solid currentColor;
+      border-radius: 0; padding: 0 0 4px; overflow: visible;
+      color: var(--ink); opacity: .6;
+      font: 600 10px/1.3 ui-monospace, monospace; letter-spacing: .03em;
+      text-align: center; white-space: nowrap;
+      /* The scale can cross a bright burn, so it carries its own shadow the way the handle's
+         chevrons do rather than relying on the dark ground being there. */
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,.85));
+      pointer-events: none;              /* the map underneath stays clickable through it */
+    }
+    /* End ticks as pseudo-elements rather than left/right borders: borders would run the full
+       height of the label and read as a bracket, where these stay a few pixels of rule. */
+    .maplibregl-ctrl-scale::before, .maplibregl-ctrl-scale::after {
+      content: ''; position: absolute; bottom: 0; width: 1px; height: 5px;
+      background: currentColor;
+    }
+    .maplibregl-ctrl-scale::before { left: 0; }
+    .maplibregl-ctrl-scale::after { right: 0; }
+    /* Two classes deep, to beat MapLibre's own corner margin at the same specificity. */
+    .maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale { margin: 0 0 12px 14px; }
     .maplibregl-popup-content { background: #12161d; color: var(--ink);
       border-radius: 8px; border: 1px solid rgba(255,255,255,.12); }
     .maplibregl-popup-content b { color: #fff; }
@@ -405,11 +431,16 @@ const map = new maplibregl.Map({
         zoom: parseFloat(q.get('z') || DS.zoom) }
     : { bounds: DS.bounds, fitBoundsOptions: { padding: fitPadding() } }),
   minzoom: 2.5, maxzoom: 17,               // 2.5, so a very small window can still fit the West
-  attributionControl: false                // re-added bottom-left, clear of the year rail
+  attributionControl: false                // the OpenStreetMap credit lives in the About panel
 });
-// No on-map controls at all: zoom is scroll and pinch, and attribution lives in the About panel
-// behind the (i) — which is why that panel is not optional, it carries the OpenStreetMap credit
-// the tiles are licensed on.
+// No on-map controls: zoom is scroll and pinch, and attribution lives in the About panel behind
+// the (i) — which is why that panel is not optional, it carries the OpenStreetMap credit the
+// tiles are licensed on.
+//
+// The one exception is the scale, which is not a control — nothing to press, and it does not
+// even take pointer events. Without it there is no way to read distance off a map whose zoom
+// spans a continent and a hillside. Bottom-left is the only corner nothing else claims.
+map.addControl(new maplibregl.ScaleControl({ maxWidth: 96, unit: 'imperial' }), 'bottom-left');
 const about = document.getElementById('about');
 const infoBtn = document.getElementById('info-btn');
 function showAbout(open = about.hidden) {
