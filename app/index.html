@@ -539,7 +539,12 @@ function showAbout(open = about.hidden) {
 }
 const title = document.getElementById('title');
 infoBtn.addEventListener('click', () => showAbout());
-addEventListener('keydown', e => { if (e.key === 'Escape') showAbout(false); });
+addEventListener('keydown', e => {
+  if (e.key === 'Escape') showAbout(false);
+  // Easter egg: 'p' loads the Pacific Crest Trail as a set of tracks, the same as dragging in
+  // GPX files yourself. Guarded against modifiers so it doesn't steal Cmd/Ctrl-P.
+  else if (e.key === 'p' && !e.ctrlKey && !e.metaKey && !e.altKey) loadPCT();
+});
 // Any touch/click/drag outside the panel dismisses it — pointerdown fires at the start of a
 // drag, so a map pan closes it without waiting for the drag to finish.
 // Capture phase, not bubble: MapLibre's own drag handling stops propagation on the canvas,
@@ -979,8 +984,13 @@ const sevCache = new Map();              // id -> FeatureCollection, so a re-cli
 const TRACK_SRC = 'tracks', TRACK_LAYER = 'track-line', TRACK_CASE = 'track-case';
 const STORE_KEY = 'unburnt.tracks.v1';
 const MI_PER_DEG = 69.0525;                  // latitude degrees to statute miles
-const SAMPLE_MI = 0.025;                     // ~40 m between burn-test samples along a track
-const MAX_SAMPLES = 40000;                   // a bound on the work any one file can ask for
+const SAMPLE_MI = 0.025;                     // ~40 m between burn-test samples, up to MAX_SAMPLES
+// The stride widens for a long track rather than the walk stopping partway: a fixed 40 m step
+// would run out at ~1,000 track-miles and silently stop testing the rest, under-reporting burn
+// history for anything longer with no sign it had happened — exactly wrong for a feature aimed
+// at trails that run hundreds of miles. Scaling the stride instead keeps every track covered
+// end-to-end; only a track past ~1,000 miles gives up some resolution to stay inside the budget.
+const MAX_SAMPLES = 40000;                   // total samples any one track's walk may spend
 let tracks = [], nextTid = 1;
 
 // Great-circle distance in miles, good to a fraction of a percent at these scales.
@@ -1032,8 +1042,13 @@ function parseGPX(text, fallbackName) {
 // Walk the track at an even spacing and ask, for each step, which mapped fires contain it.
 // Even spacing rather than per-vertex: GPX vertices are laid down by time, so a track that
 // paused at a viewpoint would otherwise weight that spot hundreds of times over.
+// `step` already accounts for the track's own length (see burnHistory), so this budget is a
+// backstop against float error piling up over tens of thousands of steps, not the mechanism
+// that keeps the walk bounded — the walk should exhaust every segment before it ever runs out.
+// Doubled rather than left tight, so accumulated rounding across many segments can never clip
+// a track's real tail before the geometry itself runs out.
 function* samples(segs, step) {
-  let budget = MAX_SAMPLES;
+  let budget = MAX_SAMPLES * 2;
   for (const seg of segs) {
     let carry = 0;
     yield seg[0];
@@ -1100,11 +1115,14 @@ function inGeometry(x, y, g) {
   return false;
 }
 
-function burnHistory(segs) {
+function burnHistory(segs, miles) {
   const { CELL, grid, bbox } = buildFireGrid();
   const hit = new Set();
   let burned = 0, total = 0;
-  for (const [x, y] of samples(segs, SAMPLE_MI)) {
+  // The floor keeps a short track at full 40 m resolution; the ratio only takes over once a
+  // track is long enough that 40 m spacing would need more than MAX_SAMPLES steps to cover it.
+  const step = Math.max(SAMPLE_MI, miles / MAX_SAMPLES);
+  for (const [x, y] of samples(segs, step)) {
     total++;
     const cands = grid.get(Math.floor(x / CELL) + ':' + Math.floor(y / CELL));
     if (!cands) continue;
@@ -1185,7 +1203,7 @@ function saveTracks() {
 let unmeasured = [];
 function measure(t) {
   const t0 = performance.now();
-  const { pct, fires: crossed } = burnHistory(t.segs);
+  const { pct, fires: crossed } = burnHistory(t.segs, t.miles);
   const top = crossed.slice(0, 3).map(p => `${p.name} ${p.year}`).join(', ');
   const more = crossed.length - 3;
   t.pct = Math.round(pct * 100);
@@ -1253,6 +1271,51 @@ async function addFiles(files) {
   const b = new maplibregl.LngLatBounds();
   for (const s of last.segs) for (const c of s) b.extend(c);
   map.fitBounds(b, { padding: 80, maxZoom: 13, duration: 700 });
+}
+
+// --- Easter egg: press 'p' for the Pacific Crest Trail ----------------------
+// Hand-plotted through the trail's well-known landmarks (Campo, Kennedy Meadows, Tuolumne
+// Meadows, Crater Lake, Cascade Locks, Manning Park...) rather than a surveyed GPS trace —
+// this is a joke, not a data source, but it runs through the exact same burn-history walk as
+// a real upload, against real fire history along the real corridor. One entry per commonly
+// recognized region, same as a multi-track GPX file already becomes several entries.
+const PCT_SEGMENTS = [
+  { name: 'PCT — Southern California', pts: [
+    [-116.4694, 32.5895], [-116.4300, 32.8642], [-116.6300, 33.2900], [-116.6800, 33.7500],
+    [-116.9114, 34.2439], [-117.6081, 34.3836], [-118.3115, 34.4919], [-118.4970, 35.0864],
+    [-118.0300, 35.6500], [-118.1394, 35.9931]
+  ] },
+  { name: 'PCT — Sierra Nevada', pts: [
+    [-118.1394, 35.9931], [-118.4325, 36.6349], [-118.6800, 37.2500], [-119.0800, 37.6100],
+    [-119.3505, 37.8742], [-119.6046, 38.3242], [-120.0324, 38.8366]
+  ] },
+  { name: 'PCT — Northern California', pts: [
+    [-120.0324, 38.8366], [-120.6310, 39.5657], [-121.2833, 40.0089], [-121.6558, 41.0130],
+    [-122.3186, 41.2438], [-122.8973, 41.4576], [-122.7108, 42.1946]
+  ] },
+  { name: 'PCT — Oregon', pts: [
+    [-122.7108, 42.1946], [-122.1685, 42.9446], [-122.1700, 43.1600], [-122.0400, 43.6000],
+    [-121.7700, 44.1000], [-121.8000, 44.6740], [-121.7100, 45.3311], [-121.8931, 45.6693]
+  ] },
+  { name: 'PCT — Washington', pts: [
+    [-121.8931, 45.6693], [-121.3900, 46.6360], [-121.4136, 47.4231], [-121.0890, 47.7451],
+    [-120.6683, 48.3078], [-120.7300, 48.5100], [-120.7734, 49.0000]
+  ] }
+];
+let pctLoaded = false;
+function loadPCT() {
+  // Fires the moment 'p' is pressed, which could be before the fire data itself has loaded —
+  // measuring against an empty `fires` would cache a permanently-empty fire grid (see
+  // buildFireGrid). Rather than let that happen, just ignore the keypress until data is ready;
+  // pressing 'p' again once it is works fine.
+  if (pctLoaded || !fires.length) return;
+  pctLoaded = true;
+  pause();
+  for (const s of PCT_SEGMENTS) addTrack(s.name, [s.pts]);
+  drawTracks();
+  const b = new maplibregl.LngLatBounds();
+  for (const s of PCT_SEGMENTS) for (const c of s.pts) b.extend(c);
+  map.fitBounds(b, { padding: 40, duration: 700 });
 }
 
 function restoreTracks() {
