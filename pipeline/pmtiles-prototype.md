@@ -108,15 +108,28 @@ screenshot from it sits directly next to one from the app. At z13 over DOLAN's c
 
 ## Running it
 
+`serve.py` now handles byte ranges itself and maps `/tiles/` to `pipeline/data/pmtiles`, so the
+whole thing runs off the one dev server:
+
 ```
-pipeline/build-pmtiles.sh 2020                       # ~8 min incl. severity extraction
-python3 rangeserve.py 8082 pipeline                  # Range-capable static server
-open http://localhost:8082/pmtiles-proto.html
+python3 serve.py
+http://localhost:8090/index.html?tiles=1      the app on the tileset
+http://localhost:8090/tiles/west.pmtiles      the tileset, read by byte range
 ```
 
-A Range-capable server is required and is the point: MapLibre's `pmtiles://` protocol reads the
-single file by byte range, which is how it would read from R2 — **no tile server, and still no
-Worker script**. Python's stock `http.server` answers 200 to a Range request and will not work.
+The same fire, one flag apart, is the comparison worth making:
+
+```
+.../?year=2020&mode=year&lng=-121.62&lat=36.09&z=13            shipped
+.../?year=2020&mode=year&lng=-121.62&lat=36.09&z=13&tiles=1    tiled
+```
+
+Byte ranges are the point, not a detail: MapLibre's `pmtiles://` protocol reads the single file
+by range, which is exactly how it reads from R2 — **no tile server, and still no Worker script**.
+Python's stock `http.server` answers **200 with the whole file** to a Range request, which the
+protocol cannot use; and because a 200 looks healthy, it fails as an unreadable tileset rather
+than an HTTP error. `pipeline/rangeserve.py` is the standalone version, kept for serving the
+prototype viewer (`pmtiles-proto.html`) from `pipeline/`.
 
 ## What this does not fix
 
@@ -231,6 +244,45 @@ The ~100 MB the tileset grew by is that recovered data.
    fitted the symptom exactly, since the losses were all in dense multi-year ground. It was not
    the cause: re-merging with `-pk` produced a byte-identical file. The flag is still wrong and
    is now `-pk`, but the corruption was upstream of the merge, in the year tilesets themselves.
+
+## Publishing to R2
+
+The tileset is ~1 GB, far past the 25 MiB per-file cap on Workers static assets, so it cannot
+ride along in `app/`. Production reads it from R2 by byte range — no Worker script, no tile
+server, the same access pattern `serve.py` already serves locally.
+
+Steps, in order. **None of these have been run** — the bucket does not exist yet.
+
+1. **Create the bucket** (needs the Cloudflare account):
+   ```
+   npx wrangler r2 bucket create unburnt-tiles
+   ```
+2. **Upload `west.pmtiles`.** Check the size limit on `wrangler r2 object put` before relying on
+   it — it has historically capped well under 1 GB, in which case use an S3-compatible client
+   (`rclone`, `aws s3`) against R2's S3 endpoint, which does multipart.
+3. **Make it readable.** Either enable the bucket's `r2.dev` subdomain (fine for this) or attach
+   a custom domain.
+4. **Set CORS** to allow `GET` and the `Range` header from the app's origin. Without it the
+   browser blocks the range requests and the tileset silently fails to load — the same shape of
+   failure as the `http.server` 200.
+5. **Point the app at it**: the `TILES` constant in `app/index.html`. `?tiles=<url>` already
+   accepts an arbitrary URL, so the new bucket can be tested against the deployed app before
+   anything becomes the default.
+6. **Flip the default** only after the decisions below.
+
+### Decisions before the tiled path becomes the default
+
+- **2004 and 2017 are missing** (#16). Those years would carry `sev_ok: false` and say "severity
+  not yet mapped", which is graceful but false — they *have* been mapped. Prefer sourcing them
+  over shipping the gap.
+- **The selection outline is gone in tiled mode.** Tiles cut each fire at tile edges; the pieces
+  are used as a fill instead, because stroking them draws tile boundaries across the burn.
+  Acceptable, or worth solving?
+- **`west_fires.geojson.gz` cannot be deleted.** GPX burn history is point-in-polygon against
+  every perimeter, so the tiled path fetches it on demand. Only `app/data/severity/` (10,505
+  files, 20.6 MB) actually leaves the repo.
+- **The basemap still stops at z14.** Zooming far enough to enjoy 30 m detail gives a stretched
+  base. The fix — a Protomaps extract — belongs on the same bucket, so the two are one job.
 
 ## Migration notes
 
