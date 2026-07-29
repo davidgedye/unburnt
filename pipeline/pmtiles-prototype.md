@@ -163,9 +163,9 @@ the mosaic already local, 14–16 MB per year tileset.
 
 ## The full build, run 2026-07-28
 
-`pipeline/build-pmtiles-all.sh` — **39 of 41 years, 927 MB, 91,883 tiles, z2–z13.** Verified by
-decoding tiles, not just reading headers: all 39 years present, both layers intact, severity
-classes 1–5 and `sev_ok` surviving the merge. Rendered through `serve.py` by byte range:
+`pipeline/build-pmtiles-all.sh` — **39 of 41 years, 1,024 MB, 92,052 tiles, z2–z13**, built in
+a single locked process and verified per year (see below). Rendered through `serve.py` by byte
+range:
 
 | view | features | requests | transferred |
 |---|---|---|---|
@@ -192,6 +192,28 @@ and says so plainly, rather than saving a 404 page as a `.zip` and failing later
 Roughly 1 hour of wall clock for 41 years including downloads, ~1.3 GB peak RAM, disk never
 below 215 GB free. The estimate of 1.5–2.5 h was pessimistic.
 
+### Verification: check geometry, not identifiers
+
+The first build was contaminated (see below) and the checks used at the time did not catch it.
+Comparing the perimeter `year` property and the severity `id` prefix both passed, because both
+stayed correct — what was missing was *geometry*, in places. 2020's tileset carried 108,324
+severity features while having none at all over DOLAN.
+
+So the check is now: for the largest severity-mapped fire of every year, land on that fire's own
+coordinates and ask whether **that fire's own** perimeter and severity are present. An id that
+says 2020 tells you nothing about whether the shape is there.
+
+Result on the clean rebuild: **39 of 39 fires, one per year, have both.** And the three that
+exposed the problem, then and now:
+
+| fire | before | after |
+|---|---|---|
+| PEARL HILL 2020 | 1,205 | 1,205 |
+| LIONSHEAD 2020 | **0** | 7,425 |
+| DOLAN 2020 | **0** | 4,849 |
+
+The ~100 MB the tileset grew by is that recovered data.
+
 ### Two process failures worth recording
 
 1. **Two builds ran concurrently.** Earlier launches that appeared to fail had not, and both
@@ -200,8 +222,15 @@ below 215 GB free. The estimate of 1.5–2.5 h was pessimistic.
    found 1993 holding 1992 and 2019 holding 2020. The script now takes an `flock` and refuses
    to start twice; verified.
 2. **Never trust a header for a content question.** `pmtiles show` reported 30 of 30 tilesets
-   healthy while two of them held the wrong year. Content verification is now part of the
-   routine: decode z4 and check the `year` property against the filename.
+   healthy while two held the wrong year — and a later, *stricter* check on ids passed tilesets
+   that were missing severity over whole fires. Each check only tested what it looked at. The
+   verification above tests the thing that actually matters: is the shape there, where it
+   should be.
+3. **A wrong theory, chased for a while.** `tile-join` ignores `--no-tile-size-limit` (its usage
+   lists only `-pk`), so it looked like the merge was dropping features from dense tiles — which
+   fitted the symptom exactly, since the losses were all in dense multi-year ground. It was not
+   the cause: re-merging with `-pk` produced a byte-identical file. The flag is still wrong and
+   is now `-pk`, but the corruption was upstream of the merge, in the year tilesets themselves.
 
 ## Migration notes
 
