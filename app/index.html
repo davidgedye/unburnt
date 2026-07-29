@@ -5,6 +5,9 @@
   <title>Wildfires of the West</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+  <!-- Only used by the ?tiles=1 data path (milestone 7). Harmless otherwise: it registers a
+       protocol MapLibre never asks for unless a source URL starts with pmtiles://. -->
+  <script src="https://unpkg.com/pmtiles@3/dist/pmtiles.js"></script>
   <link href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" rel="stylesheet">
   <style>
     /* --hot is the one accent: the stat bar's fill and the year handle both wear it. A brick
@@ -487,13 +490,33 @@ const q = new URLSearchParams(location.search);
 // out to the state edges beyond it (the westernmost fire stops short of the Pacific coastline).
 const DATASETS = {
   west: { file: 'data/west_fires.geojson.gz', repeats: 'data/west_repeats.geojson.gz',
-          label: 'Western US',
+          years: 'data/west_years.json', label: 'Western US',
           center: [-116.0, 41.3], zoom: 4.15, bounds: [[-124.9, 31.2], [-101.9, 49.1]] },
   wa:   { file: 'data/wa_fires.geojson.gz',   repeats: 'data/wa_repeats.geojson.gz',
-          label: 'Washington',
+          years: 'data/wa_years.json', label: 'Washington',
           center: [-120.3, 47.4], zoom: 6.15, bounds: [[-124.9, 45.4], [-116.8, 49.2]] }
 };
 const DS = DATASETS[q.get('data')] || DATASETS.west;
+
+// ---------------------------------------------------------------------------
+// ?tiles=1 — the vector-tile data path (milestone 7), off by default.
+//
+// The shipped path loads every perimeter as one GeoJSON before anything draws, so a single
+// simplification tolerance has to serve every zoom: right at z4, and ~15 screen pixels wrong at
+// z13. Tiles generalise per zoom and fetch only the viewport, which is both sharper close up
+// and less traffic. See pipeline/pmtiles-prototype.md for the measurements.
+//
+// It is a flag rather than a switch because the tileset is 927 MB and cannot ride along in
+// app/ — production needs it on R2, and until that exists the GeoJSON path stays the default so
+// main is always deployable. ?tiles=<url> points at any other copy.
+// ---------------------------------------------------------------------------
+const TILES = q.has('tiles')
+  ? (q.get('tiles') === '1' || q.get('tiles') === '' ? 'tiles/west.pmtiles' : q.get('tiles'))
+  : null;
+if (TILES) maplibregl.addProtocol('pmtiles', new pmtiles.Protocol().tile);
+// Spread into every layer built on the `fires` source. A vector source has to be told which
+// layer inside the tile to read; a geojson source must not be given one at all.
+const SRC_LAYER = TILES ? { 'source-layer': 'perimeters' } : {};
 const DEBUG = q.has('debug');
 // Display modes, cycled by tapping the year handle. 'all' accumulates every year up to the one
 // on show and fades the older ones; 'year' shows that season alone; 'repeat' leaves the
@@ -889,6 +912,18 @@ function clearSeverity() {
 // write for it, which is the ordinary case for the newest season.
 async function showSeverity(id) {
   sevShown = id;
+  if (TILES) {
+    // One filter change per click, on a vector source that only holds what is on screen. That
+    // is not the thing the no-data-driven-paint rule is about — it costs a re-evaluation of a
+    // few tiles, once, on a deliberate user action, not work per frame.
+    for (const s of SEV) {
+      map.setFilter(s.id, ['all', ['==', ['get', 'sev'], s.c], ['==', ['get', 'id'], id]]);
+      map.setPaintProperty(s.id, 'fill-opacity', s.op);
+    }
+    map.setPaintProperty('sel-unmapped', 'fill-opacity', 0.92);
+    dlog(`severity ${id}: from tiles`);
+    return;
+  }
   let fc = sevCache.get(id);
   if (!fc) {
     try {
@@ -1211,18 +1246,42 @@ function measure(t) {
   dlog(`track "${t.name}": ${t.miles.toFixed(1)} mi, ${t.pct}% burned, ` +
        `${crossed.length} fires, ${Math.round(performance.now() - t0)} ms`);
 }
+// Point-in-polygon against every perimeter needs every perimeter, and the tiled path has none
+// in memory — a vector source only ever holds what is on screen. Measuring against that would
+// report 0% burned for any track outside the viewport, which is silently wrong and worse than
+// not answering. So the tiled path fetches the fires dataset the first time a track needs it:
+// on demand, once, and only for people who actually drop a GPX.
+let firesLoad = null;
+function ensureFires() {
+  if (fires.length) return Promise.resolve();
+  return firesLoad ??= loadGz(DS.file).then(fc => {
+    fc.features.forEach((f, i) => {
+      f.properties.year = +f.properties.ig_date.slice(0, 4);
+      f.properties.fid = i;
+    });
+    fires = fc.features;
+    fireGrid = null;                               // rebuild it against the real data
+    dlog(`${fires.length} perimeters loaded for track measuring`);
+  });
+}
+
 function measurePending() {
   if (!unmeasured.length) return;
-  for (const t of unmeasured) measure(t);
-  unmeasured = [];
-  drawTracks();                                    // the properties just changed
+  ensureFires().then(() => {
+    for (const t of unmeasured) measure(t);
+    unmeasured = [];
+    drawTracks();                                  // the properties just changed
+  }).catch(err => console.error('could not load perimeters for track measuring:', err));
 }
 
 function addTrack(name, segs) {
   const t = { tid: nextTid++, name, segs, pct: 0, burned: '',
               miles: segs.reduce((m, s) => m + segMiles(s), 0) };
   tracks.push(t);
-  if (raf) unmeasured.push(t); else measure(t);
+  // Under tiles the perimeters may still need fetching, so measuring is always deferred; the
+  // same queue and the same flush handle it.
+  if (raf || TILES) unmeasured.push(t); else measure(t);
+  if (TILES && !raf) measurePending();
   return t;
 }
 
@@ -1371,6 +1430,8 @@ function popupPlacement(feature, fallback) {
     } else for (const part of c) visit(part);
   };
   if (feature?.geometry) visit(feature.geometry.coordinates);
+  // A FeatureCollection: the tiled path hands over the clicked fire as its rendered pieces.
+  else if (feature?.features) for (const f of feature.features) visit(f.geometry.coordinates);
   if (!n) return { lngLat: fallback, anchor: 'bottom' };
 
   const W = innerWidth, H = innerHeight;
@@ -1562,7 +1623,23 @@ function wireControls() {
     }
     // Stroke the shape being described, from the full original geometry rather than the clipped
     // copy the query returned.
-    const feature = rep ? repeats[p.rid] : fires[p.fid];
+    //
+    // Tiled has no full geometry to reach for: a vector tile holds each fire cut at tile edges.
+    // Gathering every rendered piece of the clicked fire gives back its whole shape as a *fill*
+    // — seamless, because the pieces abut — which is what `sel-unmapped` needs so severity gaps
+    // read as unmapped. The outline is the casualty: stroking each piece would draw tile-edge
+    // seams straight across the fire, so it is switched off rather than drawn wrong.
+    let feature;
+    if (rep) {
+      feature = repeats[p.rid];
+    } else if (TILES) {
+      const parts = map.queryRenderedFeatures({ layers: queryLayers })
+        .filter(f => f.properties.id === p.id);
+      feature = { type: 'FeatureCollection', features: parts };
+    } else {
+      feature = fires[p.fid];
+    }
+    map.setPaintProperty('sel-line', 'line-opacity', TILES && !rep ? 0 : 0.95);
     map.getSource('sel').setData(feature ?? NOTHING);
     const { lngLat, anchor } = popupPlacement(feature, e.lngLat);
     popup = new maplibregl.Popup({ anchor, offset: GAP }).setLngLat(lngLat)
@@ -1577,6 +1654,13 @@ function wireControls() {
 // content-encoding config. Gzip magic-byte detection means it also works if the host
 // does send Content-Encoding: gzip (in which case the browser already decompressed).
 // ---------------------------------------------------------------------------
+// The year summary is plain JSON and tiny; no gzip dance needed.
+async function loadJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+  return r.json();
+}
+
 async function loadGz(url) {
   const buf = await (await fetch(url)).arrayBuffer();
   const u8 = new Uint8Array(buf);
@@ -1621,30 +1705,53 @@ function loadRepeats() {
   }).catch(err => console.error('repeat-burn layer failed to load:', err));
 }
 
-Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([fc]) => {
+// The two data paths differ only in what they load and how the `fires` source is declared.
+// Everything downstream — 41 years of layers, static filters, constant paint — is identical,
+// which is the point: a vector-tile source takes the same static filters a geojson one does, so
+// none of the animation engine changes and no data-driven paint creeps back in.
+const bootstrap = TILES
+  ? Promise.all([loadJSON(DS.years), new Promise(res => map.on('load', res))])
+      .then(([summary]) => ({ summary }))
+  : Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))])
+      .then(([fc]) => ({ fc }));
+
+bootstrap.then(({ fc, summary }) => {
   document.getElementById('loading').classList.add('gone');
-  const seen = new Set();
-  fc.features.forEach((f, i) => {
-    f.properties.year = +f.properties.ig_date.slice(0, 4);
-    f.properties.fid = i;              // identifies the clicked fire; indexes back into `fires`
-    seen.add(f.properties.year);
-  });
-  fires = fc.features;
-  years = [...seen].sort((a, b) => a - b);
+
+  if (fc) {
+    const seen = new Set();
+    fc.features.forEach((f, i) => {
+      f.properties.year = +f.properties.ig_date.slice(0, 4);
+      f.properties.fid = i;            // identifies the clicked fire; indexes back into `fires`
+      seen.add(f.properties.year);
+    });
+    fires = fc.features;
+    years = [...seen].sort((a, b) => a - b);
+    // Total acres burned per year. The one feature with no acreage contributes nothing rather
+    // than poisoning its year's total with NaN.
+    const slot = new Map(years.map((y, k) => [y, k]));
+    acresByYear = years.map(() => 0);
+    firesByYear = years.map(() => 0);
+    for (const f of fc.features) {
+      const k = slot.get(f.properties.year);
+      acresByYear[k] += f.properties.acres || 0;
+      firesByYear[k]++;                    // counted even when its acreage is missing
+    }
+  } else {
+    // Tiled: a vector source only ever holds what is on screen, so there is nothing here to
+    // aggregate 41 years out of. The same totals are precomputed (build-year-summary.py) —
+    // 720 bytes against the 3.15 MB that was being loaded largely to compute them.
+    years = summary.years;
+    firesByYear = summary.fires;
+    acresByYear = summary.acres;
+  }
   N = years.length;
 
-  // Total acres burned per year. The one feature with no acreage contributes nothing rather
-  // than poisoning its year's total with NaN.
-  const slot = new Map(years.map((y, k) => [y, k]));
-  acresByYear = years.map(() => 0);
-  firesByYear = years.map(() => 0);
-  for (const f of fc.features) {
-    const k = slot.get(f.properties.year);
-    acresByYear[k] += f.properties.acres || 0;
-    firesByYear[k]++;                      // counted even when its acreage is missing
+  if (TILES) {
+    map.addSource('fires', { type: 'vector', url: 'pmtiles://' + TILES });
+  } else {
+    map.addSource('fires', { type: 'geojson', data: fc });
   }
-
-  map.addSource('fires', { type: 'geojson', data: fc });
   // Two fill layers per year, added oldest-first so newer fires draw on top: one for
   // prescribed fire, one for everything else (wildfire, wildland fire use, other) — split so
   // each can carry its own constant colour/opacity, rather than a data-driven expression keyed
@@ -1654,12 +1761,12 @@ Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([f
     layers[k] = 'yr-' + y;
     rxLayers[k] = 'yr-' + y + '-rx';
     map.addLayer({
-      id: layers[k], type: 'fill', source: 'fires',
+      id: layers[k], type: 'fill', source: 'fires', ...SRC_LAYER,
       filter: ['all', ['==', ['get', 'year'], y], ['!', isRx]],
       paint: { 'fill-color': COLOR[AGES - 1], 'fill-opacity': 0 }
     });
     map.addLayer({
-      id: rxLayers[k], type: 'fill', source: 'fires',
+      id: rxLayers[k], type: 'fill', source: 'fires', ...SRC_LAYER,
       filter: ['all', ['==', ['get', 'year'], y], isRx],
       paint: { 'fill-color': RX_COLOR[AGES - 1], 'fill-opacity': 0 }
     });
@@ -1672,7 +1779,7 @@ Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([f
   years.forEach((y, k) => {
     sevLayers[k] = 'yr-' + y + '-sev';
     map.addLayer({
-      id: sevLayers[k], type: 'line', source: 'fires',
+      id: sevLayers[k], type: 'line', source: 'fires', ...SRC_LAYER,
       filter: ['all', ['==', ['get', 'year'], y], ['==', ['get', 'sev_ok'], true]],
       paint: { 'line-color': '#ffe9c4', 'line-opacity': 0,
                'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.8, 9, 1.4, 14, 2] }
@@ -1741,10 +1848,15 @@ Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([f
   // to survive both the near-black ground and the brightest part of the fire ramp.
   // The severity overlay for whichever fire is being looked at. One fill per class, constant
   // colour, opacity toggled — no data-driven paint, like everything else here.
-  map.addSource(SEV_SRC, { type: 'geojson', data: NOTHING });
+  // Tiled: severity is a layer inside the same tileset, so there is nothing to fetch — the
+  // polygons are already on screen and only need to be filtered to the clicked fire. Otherwise
+  // it is the per-fire file the geojson path downloads on demand.
+  if (!TILES) map.addSource(SEV_SRC, { type: 'geojson', data: NOTHING });
   for (const s of SEV) {
     map.addLayer({
-      id: s.id, type: 'fill', source: SEV_SRC,
+      id: s.id, type: 'fill',
+      source: TILES ? 'fires' : SEV_SRC,
+      ...(TILES ? { 'source-layer': 'severity' } : {}),
       filter: ['==', ['get', 'sev'], s.c],
       paint: { 'fill-color': s.color, 'fill-opacity': 0 }
     });
@@ -1766,7 +1878,8 @@ Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))]).then(([f
 
   peakAcres = Math.max(...acresByYear) || 1;
   wireControls();
-  dlog(`${fc.features.length} fires, ${N} yearly states, ${layers.length + rxLayers.length} layers`);
+  dlog(`${fc ? fc.features.length + ' fires' : 'tiled: ' + TILES}, ${N} yearly states, ` +
+       `${layers.length + rxLayers.length} layers`);
   const jump = years.indexOf(+q.get('year'));        // ?year=1995 parks there, for sharing/testing
   // Repeat mode is outside the timeline, so it never plays; it parks on the last year, which
   // is where dragging out of it lands you — the full accumulated map.
