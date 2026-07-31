@@ -1,21 +1,33 @@
 #!/usr/bin/env bash
-# Build the whole 41-year record as one vector tileset (milestone 7).
+# Build the whole 41-year record as vector tilesets (milestone 7).
+#
+# Two products, because the app reads them differently:
+#
+#   perimeters.pmtiles       all years in one tileset, z2-z13, ~50 MB. The accumulated view
+#                            lights every year at once off a single source, so perimeters have
+#                            to share one.
+#   severity/<year>.pmtiles  one tileset per year, z2-z13. Severity is drawn a season at a
+#                            time, and merging all 41 put 32 fires from five decades into every
+#                            tile in order to draw one: 1.6 MB where 160 KB does. Per year is
+#                            ~10x leaner per view, and it is what lets severity go down to z2
+#                            at all — the old z9 floor existed to cap the damage from merging.
 #
 # Measured on this laptop, from the 2020 prototype (pmtiles-prototype.md):
 #   peak RAM   ~1.3 GB   — one year at a time; a single 41-year tippecanoe run over ~5.4 GB of
 #                          input would want roughly 19 GB and will not fit in the 7 GB WSL2 cap
 #   peak disk  ~3-4 GB   — intermediates are deleted as each year finishes
-#   output     ~1.2 GB   — destined for R2, not git
+#   output     ~1.1 GB   — destined for R2, not git
 #   time       ~4-5 h    — hence: resumable, and safe to leave running overnight
 #
-# Resumable by design. Every year that already has years/<year>.pmtiles is skipped, each year's
-# tileset is written to .tmp and renamed only on success, and killing the script at any point
+# Resumable by design. A year counts as finished when perims/<year>.pmtiles exists, and that is
+# written last — after severity — so an interrupted run never looks complete. Each tileset is
+# written under a .building name and renamed only on success, so killing the script at any point
 # loses at most the year in flight. Re-run it and it picks up.
 #
 # Usage:
 #   pipeline/build-pmtiles-all.sh                 # all years, resuming
 #   pipeline/build-pmtiles-all.sh 1988 1989 1990  # just these
-#   pipeline/build-pmtiles-all.sh --merge         # skip building, just merge what is there
+#   pipeline/build-pmtiles-all.sh --merge         # skip building, just merge the perimeters
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,10 +38,11 @@ export GDAL_CACHEMAX=512
 export SIEVE=8              # px, ~1.8 acres — the value pipeline-validation.md settled on
 
 OUT="$ROOT/pipeline/data/pmtiles"
-YEARS="$OUT/years"
+PERIMS="$OUT/perims"          # per-year perimeters, merged at the end into perimeters.pmtiles
+SEV="$OUT/severity"           # per-year severity, shipped as-is
 WORK="$OUT/work"
 URLS="$ROOT/pipeline/data/mosaic-urls.json"
-mkdir -p "$YEARS" "$WORK"
+mkdir -p "$PERIMS" "$SEV" "$WORK"
 WEST="'WA','OR','CA','ID','NV','UT','AZ','MT','WY','CO','NM'"
 
 log() { printf '%s  %s\n' "$(date +%H:%M:%S)" "$*"; }
@@ -46,7 +59,7 @@ fi
 
 build_year() {
   local y="$1"
-  if [ -f "$YEARS/$y.pmtiles" ]; then
+  if [ -f "$PERIMS/$y.pmtiles" ]; then
     log "$y  already built, skipping"
     return 0
   fi
@@ -103,78 +116,71 @@ build_year() {
   python3 "$ROOT/pipeline/attach-severity.py" --inplace "$WORK/p.geojson" "$WORK/stats.json" \
     || { log "$y  attach FAILED"; return 1; }
 
-  # Two tilesets, because the layers want different minzooms and tippecanoe takes one per run:
-  #  - perimeters from z2: the app's minzoom is 2.5, and a source has no tiles below its own
-  #    minzoom, so fires would simply vanish on a small window. --no-tile-size-limit because
-  #    dropping features to fit a tile would silently delete fires from the accumulated view,
-  #    which is the one thing this map must not do.
-  #  - severity from z9: below that it is far under a pixel. Not tiling it there is what stops
-  #    a regional view pulling 1.6 MB of something invisible.
+  # Two tilesets, because the layers want different tile-size policies and tippecanoe takes one
+  # set of flags per run. Both cover z2-z13: a source has no tiles below its own minzoom, and the
+  # app's minzoom is 2.5, so anything tiled higher simply vanishes on a small window.
+  #  - perimeters: --no-tile-size-limit, because dropping features to fit a tile would silently
+  #    delete fires from the accumulated view, which is the one thing this map must not do.
+  #  - severity: keeps the default 500 KB cap and coalesces to fit. Severity used to start at z9
+  #    on the theory that lower zooms were paying for detail under a pixel. Measured on 2020, the
+  #    worst year in the record, z2-z8 adds ~11.5 MB to a 97 MB year and the cap holds every tile
+  #    under 500 KB — a fire's z6 tile is *smaller* than its z9 one, because simplification
+  #    outruns the extra ground. The real cost was never the zoom, it was merging all 41 years
+  #    into one tileset so a single tile carried 32 fires when the app draws one. Hence per-year.
+  # Each tileset goes straight to its final directory under a .building name and is renamed only
+  # on success. The temporary name has to keep the .pmtiles extension: tippecanoe picks its
+  # output *format* from the extension, so a plain ".tmp" silently produces an mbtiles that is
+  # then renamed into a file with the wrong magic number — valid-looking, unreadable, and only
+  # discovered much later.
+  #
+  # Severity first, perimeters last, because the perimeter tileset is what marks the year
+  # finished. Any interruption therefore leaves the year looking unbuilt, which is the safe way
+  # round: re-running redoes work, where the reverse would skip a year with no severity.
   log "$y  tiling"
-  rm -f "$WORK/p.pmtiles" "$WORK/s.pmtiles"
-  tippecanoe -q -o "$WORK/p.pmtiles" -Z2 -z13 --no-tile-size-limit \
-    --detect-shared-borders --named-layer=perimeters:"$WORK/p.geojson" \
-    || { log "$y  tippecanoe perimeters FAILED"; return 1; }
+  rm -f "$SEV/$y.building.pmtiles" "$PERIMS/$y.building.pmtiles"
   # A cheap emptiness test. The previous version parsed the entire severity GeoJSON — up to
   # 372 MB — purely to count its features, which is slow and throws on a partial file.
   if [ -s "$WORK/s.geojson" ] && ! grep -q '"features":\[\]' "$WORK/s.geojson"; then
-    tippecanoe -q -o "$WORK/s.pmtiles" -Z9 -z13 \
+    tippecanoe -q -o "$SEV/$y.building.pmtiles" -Z2 -z13 \
       --detect-shared-borders --coalesce-densest-as-needed \
       --named-layer=severity:"$WORK/s.geojson" \
       || { log "$y  tippecanoe severity FAILED"; return 1; }
+    mv "$SEV/$y.building.pmtiles" "$SEV/$y.pmtiles"
   else
     log "$y  no severity polygons (expected for the newest season)"
+    rm -f "$SEV/$y.pmtiles"      # a rebuild must not leave last run's severity behind
   fi
-
-  # Write to a temporary name and rename only on success, so a kill mid-write cannot leave a
-  # half tileset that the resume logic would mistake for a finished year. The name has to keep
-  # the .pmtiles extension: tile-join picks its output *format* from the extension, so a plain
-  # ".tmp" silently produces an mbtiles that is then renamed into a file with the wrong magic
-  # number — valid-looking, unreadable, and only discovered at merge time.
-  local tmp="$YEARS/$y.building.pmtiles"
-  rm -f "$tmp"
-  if [ -f "$WORK/s.pmtiles" ]; then
-    tile-join -o "$tmp" --no-tile-size-limit "$WORK/p.pmtiles" "$WORK/s.pmtiles" \
-      || { log "$y  tile-join FAILED"; return 1; }
-  else
-    cp "$WORK/p.pmtiles" "$tmp"
-  fi
-  mv "$tmp" "$YEARS/$y.pmtiles"
+  tippecanoe -q -o "$PERIMS/$y.building.pmtiles" -Z2 -z13 --no-tile-size-limit \
+    --detect-shared-borders --named-layer=perimeters:"$WORK/p.geojson" \
+    || { log "$y  tippecanoe perimeters FAILED"; return 1; }
+  mv "$PERIMS/$y.building.pmtiles" "$PERIMS/$y.pmtiles"
 
   rm -f "$WORK"/*.geojson "$WORK"/*.pmtiles "$WORK"/stats.json
   [ "$downloaded" = 1 ] && rm -rf "$dir"
-  log "$y  done in $((SECONDS - t0))s  ($(du -h "$YEARS/$y.pmtiles" | cut -f1))"
+  local ssz="none"
+  [ -f "$SEV/$y.pmtiles" ] && ssz=$(du -h "$SEV/$y.pmtiles" | cut -f1)
+  log "$y  done in $((SECONDS - t0))s  (perimeters $(du -h "$PERIMS/$y.pmtiles" | cut -f1), severity $ssz)"
 }
 
 merge_all() {
+  # Perimeters only. Merging severity is exactly what put 32 fires from five decades into a
+  # single tile to draw one, so it stays per-year and ships as built.
+  #
+  # One join over all 41 rather than the batches the merged build needed: those existed because
+  # each input carried a year of severity and ran to tens of MB. Perimeters are ~1 MB a year, so
+  # the whole join is ~50 MB and there is nothing left to protect against.
   # Excludes any *.building.pmtiles left by an interrupted run.
   local files=()
-  for f in "$YEARS"/*.pmtiles; do [[ "$f" == *.building.pmtiles ]] || files+=("$f"); done
+  for f in "$PERIMS"/*.pmtiles; do [[ "$f" == *.building.pmtiles ]] || files+=("$f"); done
   [ -e "${files[0]}" ] || { log "nothing to merge"; return 1; }
-  log "merging ${#files[@]} year tilesets"
-  # In batches rather than one 41-way join: tile-join held to 556 MB on two inputs, but this
-  # laptop has 7 GB and nothing is gained by finding out where the ceiling is at 3 a.m.
-  local batch=() n=0 parts=()
-  for f in "${files[@]}"; do
-    batch+=("$f"); n=$((n+1))
-    if [ ${#batch[@]} -ge 8 ]; then
-      local p="$WORK/part$n.pmtiles"
-      tile-join -o "$p" --no-tile-size-limit "${batch[@]}" || return 1
-      parts+=("$p"); batch=()
-      log "  batch through $(basename "$f") -> $(du -h "$p" | cut -f1)"
-    fi
-  done
-  if [ ${#batch[@]} -gt 0 ]; then
-    local p="$WORK/partX.pmtiles"
-    tile-join -o "$p" --no-tile-size-limit "${batch[@]}" || return 1
-    parts+=("$p")
-  fi
-  rm -f "$OUT/west.building.pmtiles"
-  tile-join -o "$OUT/west.building.pmtiles" --no-tile-size-limit "${parts[@]}" || return 1
-  mv "$OUT/west.building.pmtiles" "$OUT/west.pmtiles"
-  rm -f "$WORK"/part*.pmtiles
-  log "wrote $OUT/west.pmtiles  ($(du -h "$OUT/west.pmtiles" | cut -f1))"
-  pmtiles show "$OUT/west.pmtiles" 2>/dev/null | grep -iE 'min zoom|max zoom|tile entries' | sed 's/^/  /'
+  log "merging ${#files[@]} year perimeter tilesets"
+  rm -f "$OUT/perimeters.building.pmtiles"
+  tile-join -o "$OUT/perimeters.building.pmtiles" --no-tile-size-limit "${files[@]}" || return 1
+  mv "$OUT/perimeters.building.pmtiles" "$OUT/perimeters.pmtiles"
+  log "wrote $OUT/perimeters.pmtiles  ($(du -h "$OUT/perimeters.pmtiles" | cut -f1))"
+  local n=0
+  for f in "$SEV"/*.pmtiles; do [[ -f "$f" && "$f" != *.building.pmtiles ]] && n=$((n+1)); done
+  log "severity: $n per-year tilesets in $SEV  ($(du -sh "$SEV" | cut -f1))"
 }
 
 main() {
