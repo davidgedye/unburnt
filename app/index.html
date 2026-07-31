@@ -870,12 +870,15 @@ let sevGap = new Set();
 const stat = document.getElementById('stat');
 const modeBtns = [...document.querySelectorAll('#modes button')];
 
-// Rounded to three significant-ish figures with a suffix: this row is read at a glance while
-// the handle is moving, and 120,533,111 is not a number anyone reads at a glance. The threshold
-// is 999,500 rather than a million so that nothing ever renders as "1000K".
+// Rounded with a suffix: this row is read at a glance while the handle is moving, and
+// 120,533,111 is not a number anyone reads at a glance. Millions keep a decimal, because whole
+// millions are too coarse for a single season — most years land between 1M and 9M, so without
+// it neighbouring years read the same. Thousands do not need one at that size.
+//
+// The threshold is 999,500 rather than a million so that nothing ever renders as "1000K".
 function compact(n) {
   n = Math.round(n);
-  if (n >= 999500) return Math.round(n / 1e6) + 'M';
+  if (n >= 999500) return (n / 1e6).toFixed(1) + 'M';
   if (n >= 1000) return Math.round(n / 1000) + 'K';
   return String(n);
 }
