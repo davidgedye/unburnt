@@ -42,6 +42,7 @@ PERIMS="$OUT/perims"          # per-year perimeters, merged at the end into peri
 SEV="$OUT/severity"           # per-year severity, shipped as-is
 WORK="$OUT/work"
 URLS="$ROOT/pipeline/data/mosaic-urls.json"
+STATS="$ROOT/pipeline/data/severity-stats.json"
 mkdir -p "$PERIMS" "$SEV" "$WORK"
 WEST="'WA','OR','CA','ID','NV','UT','AZ','MT','WY','CO','NM'"
 
@@ -128,6 +129,20 @@ build_year() {
   # not, and the popup says so.
   python3 "$ROOT/pipeline/attach-severity.py" --inplace "$WORK/p.geojson" "$WORK/stats.json" \
     || { log "$y  attach FAILED"; return 1; }
+
+  # Keep the year's stats in the cumulative file the whole-record dataset is tagged from, so
+  # severity-full.py is the single source of truth for what burned how hard. Without this the
+  # only producer was build-severity.py, whose per-fire overlays the app no longer uses.
+  if [ -s "$WORK/stats.json" ]; then
+    python3 - "$STATS" "$WORK/stats.json" <<'PY'
+import json, os, sys
+dst, src = sys.argv[1], sys.argv[2]
+all_stats = json.load(open(dst)) if os.path.exists(dst) else {}
+all_stats.update(json.load(open(src)))
+json.dump(all_stats, open(dst, 'w'), separators=(',', ':'))
+print(f'   severity-stats.json now covers {len(all_stats):,} fires')
+PY
+  fi
 
   # Two tilesets, because the layers want different tile-size policies and tippecanoe takes one
   # set of flags per run. Both cover z2-z13: a source has no tiles below its own minzoom, and the

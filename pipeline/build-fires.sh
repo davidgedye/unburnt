@@ -2,9 +2,10 @@
 # Build the main fire datasets the animation runs on.
 #
 # This used to live only as a command block in animation-plan.md. It needs to be runnable now
-# that #14 adds fields to it: `id` (the MTBS event_id, which names each fire's severity file),
-# `sev_ok` (does that file exist), and `sev` (the class breakdown, so the popup can report it
-# without waiting on a fetch). Run pipeline/build-severity.py first — this reads its stats.
+# It carries `id` (the MTBS event_id), `sev_ok` (did this fire produce drawable severity
+# polygons) and `sev` (the class breakdown, so the popup can report it without waiting on a
+# fetch). Those come from pipeline/data/severity-stats.json, which build-pmtiles-all.sh
+# accumulates as it builds each year — so run that first.
 #
 # Usage: pipeline/build-fires.sh
 set -euo pipefail

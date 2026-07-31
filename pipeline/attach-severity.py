@@ -1,62 +1,66 @@
 #!/usr/bin/env python3
-"""Fold each fire's severity summary into the main fires dataset, and gzip it.
+"""Fold each fire's severity summary into the main fires dataset.
 
-Two fields per fire, both small enough to ride on the dataset the app already loads:
+Two fields per fire:
 
-  sev_ok  — is there a severity overlay to fetch for this fire? The app uses it twice: to give
-            those fires an outline in one-year mode, so nobody clicks and hopes, and to decide
-            whether a click should fetch anything at all.
-  sev     — percent of the fire's mapped area in each class, 1 through 5, as whole numbers.
-            Carried here rather than inside the overlay file so the popup can report the
-            breakdown the instant it opens, without waiting on a fetch it may not even make.
+  sev_ok  — did this fire produce drawable severity polygons? The app uses it twice: to give
+            those fires an outline in Single Year, so nobody clicks and hopes, and to decide
+            whether a click has anything to show.
+  sev     — percent of the fire's mapped area in each class, 1 through 5, as whole numbers, so
+            the popup can report the breakdown the instant it opens.
 
-Percentages are of *mapped* pixels: class 6 (non-processing mask) and unmapped ground are left
-out of the denominator, so "62% high" means 62% of what MTBS actually assessed.
+Both modes now decide sev_ok the same way. It used to mean "a per-fire overlay file exists in
+app/data/severity", which was true of the GeoJSON path and is meaningless now that severity
+lives in per-year tilesets and those 10,505 files are gone. Left alone it would have quietly
+marked every fire as having no severity the next time the dataset was rebuilt.
+
+The stats come from severity-full.py, accumulated across years by build-pmtiles-all.sh, so
+there is one source of truth for what burned how hard rather than a tiled one and a shipped one.
 
 Two modes:
   attach-severity.py <in.geojson> <out.geojson.gz>
-      the shipped path — reads the global stats file and the per-fire overlay directory, and
-      writes a gzipped dataset for the app.
+      the whole record at once, from pipeline/data/severity-stats.json — used by build-fires.sh
+      to write the dataset the app still loads for GPX burn history.
   attach-severity.py --inplace <perims.geojson> <stats.json>
-      the tiling path (build-pmtiles-all.sh) — one year at a time, with that year's stats, and
-      "has an overlay" means "this fire produced severity polygons" because in a tileset there
-      are no per-fire files to look for. Rewrites the GeoJSON in place, before tippecanoe.
+      one year, with that year's stats, rewritten in place before tippecanoe.
 """
 import gzip, json, os, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATS = os.path.join(ROOT, 'pipeline/data/severity-stats.json')
-OVERLAYS = os.path.join(ROOT, 'app/data/severity')
 CLASSES = (1, 2, 3, 4, 5)
+
+
+def tag(fc, stats):
+    """Stamp sev_ok and the class breakdown onto a FeatureCollection, in place.
+
+    One rule for both callers. `sev_ok` means "this fire produced drawable severity polygons",
+    which is what decides whether it gets an outline and whether a click has anything to show.
+    It used to mean "a per-fire overlay file exists on disk" — those files are gone, and with
+    them the only reason the two modes differed.
+
+    Percentages are of *mapped* pixels: class 6 (non-processing mask) and unmapped ground are
+    left out of the denominator, so "62% high" means 62% of what MTBS actually assessed.
+    """
+    n_ok = 0
+    for feat in fc['features']:
+        p = feat['properties']
+        counts = stats.get(p.get('id'))
+        mapped = sum(v for k, v in (counts or {}).items() if int(k) in CLASSES)
+        p['sev_ok'] = bool(mapped)
+        if mapped:
+            n_ok += 1
+            p['sev'] = [round(counts.get(str(c), counts.get(c, 0)) * 100 / mapped)
+                        for c in CLASSES]
+    return n_ok
 
 
 def main(src, dst):
     stats = json.load(open(STATS)) if os.path.exists(STATS) else {}
-    have = set()
-    if os.path.isdir(OVERLAYS):
-        have = {f[:-len('.geojson.gz')] for f in os.listdir(OVERLAYS)
-                if f.endswith('.geojson.gz')}
-    print(f'  {len(stats):,} fires with severity stats, {len(have):,} with an overlay file')
-
+    print(f'  {len(stats):,} fires with severity stats')
     fc = json.load(open(src))
-    n_ok = 0
-    for feat in fc['features']:
-        p = feat['properties']
-        fid = p.get('id')
-        counts = stats.get(fid)
-        # An overlay file is what the app actually fetches, so that — not the stats — is what
-        # sev_ok promises. A fire can have counts but no drawable polygons (everything sieved
-        # away, or all of it class 6); claiming otherwise would send the app after a 404.
-        p['sev_ok'] = fid in have
-        if p['sev_ok']:
-            n_ok += 1
-        if counts:
-            mapped = sum(v for k, v in counts.items() if int(k) in CLASSES)
-            if mapped:
-                p['sev'] = [round(counts.get(str(c), counts.get(c, 0)) * 100 / mapped)
-                            for c in CLASSES]
-    print(f'  {n_ok:,} of {len(fc["features"]):,} fires carry an overlay')
-
+    n_ok = tag(fc, stats)
+    print(f'  {n_ok:,} of {len(fc["features"]):,} fires have severity')
     with gzip.open(dst, 'wt') as fh:
         json.dump(fc, fh, separators=(',', ':'))
     print(f'  wrote {dst} ({os.path.getsize(dst) / 1e6:.2f} MB)')
@@ -66,18 +70,7 @@ def inplace(perims_path, stats_path):
     """One year's perimeters, tagged from that year's severity stats, rewritten in place."""
     stats = json.load(open(stats_path)) if os.path.exists(stats_path) else {}
     fc = json.load(open(perims_path))
-    n_ok = 0
-    for feat in fc['features']:
-        p = feat['properties']
-        counts = stats.get(p.get('id'))
-        # In a tileset there is no per-fire file to check for, so "has severity" is decided by
-        # whether any drawable class came back for this fire — which is the same question.
-        mapped = sum(v for k, v in (counts or {}).items() if int(k) in CLASSES)
-        p['sev_ok'] = bool(mapped)
-        if mapped:
-            n_ok += 1
-            p['sev'] = [round(counts.get(str(c), counts.get(c, 0)) * 100 / mapped)
-                        for c in CLASSES]
+    n_ok = tag(fc, stats)
     with open(perims_path, 'w') as fh:
         json.dump(fc, fh, separators=(',', ':'))
     print(f'   {n_ok}/{len(fc["features"])} fires tagged with severity')

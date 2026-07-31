@@ -446,7 +446,10 @@ no gaps). The cost is the documented ~2-year lag, and it lands exactly where the
 That is not hidden — it is what `sev_ok` is for. A 2024 megafire like PARK says *severity not yet
 mapped* rather than showing nothing, the same honest-absence habit as `acreage unknown`.
 
-**Pipeline** (`build-severity.py`, then `thin-severity.py`, then `build-fires.sh`): per fire,
+**Pipeline** — *superseded; see below.* Severity now lives in per-year vector tilesets built by
+`build-pmtiles-all.sh`, and the per-fire overlays this describes were deleted along with
+`build-severity.py`, `thin-severity.py` and `fetch-mosaics.sh`. What it did (`build-severity.py`,
+then `thin-severity.py`, then `build-fires.sh`): per fire,
 window-read that fire's bbox out of the year's mosaic — a few ms, versus clipping a
 137k × 89k raster — mask to the perimeter so a neighbour's pixels don't count, sieve,
 polygonize by class, reproject, simplify, gzip. `fetch-mosaics.sh` pulls each year, builds it

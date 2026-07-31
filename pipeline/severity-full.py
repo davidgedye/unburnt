@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PROTOTYPE support: one year of severity as a single full-fidelity GeoJSON, for tiling.
 
-Same extraction as build-severity.py, but sieved only enough to drop single-pixel noise and
+Sieved only enough to drop single-pixel noise and
 not simplified at all — tippecanoe does the generalising, per zoom, which is the whole point of
 the experiment. Writes one FeatureCollection with an `id` per polygon so the app can still tell
 which fire a shape belongs to.
@@ -29,7 +29,7 @@ Per fire: window-read that fire's bbox out of the year's mosaic (a few ms — no
 full 137k x 89k raster), mask to the perimeter, sieve, polygonize by class, reproject, simplify,
 gzip. Class 1 unburned/low, 2 low, 3 moderate, 4 high, 5 increased greenness, 6 masked.
 
-Usage: pipeline/build-severity.py <year> [<year> ...]      or  --all
+Usage: pipeline/severity-full.py <year> <out.geojson> <out-stats.json>
 Needs the user-space GIS env and the year's mosaic under pipeline/data/mosaicYYYY/.
 """
 import gzip, json, math, os, sys, time
