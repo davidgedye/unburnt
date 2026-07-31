@@ -329,8 +329,9 @@
     <h4>How hard it burned</h4>
     <p>A perimeter says a fire reached here; it doesn't say what it did. In <b>One year</b>,
        fires whose burn severity has been mapped carry a faint outline &mdash; click one and
-       the fire is repainted by severity: cool slate where the ground barely burned, through
-       amber and orange to deep red where the canopy went. The popup gives the split.</p>
+       the fire is repainted by severity: amber through orange to deep red where the canopy
+       went. Ground that barely burned is left unpainted, so it reads as holes in the burn
+       rather than as a colour of its own. The popup gives the split, that share included.</p>
     <p>Severity is 30&nbsp;m detail about a single fire, so it is offered where it can actually
        be read &mdash; one fire, close up &mdash; rather than as a layer over the whole West,
        and each fire's data is only fetched when you ask for it.</p>
@@ -960,29 +961,50 @@ function closePopup() { if (popup) { popup.remove(); popup = null; } }
 // Clearing is separate from closePopup(): the popup can go without the overlay going (a click
 // on empty ground closes both), but the overlay must never outlive the year or the view it
 // belongs to.
+// While a fire's severity is on show, that fire is taken out of its own year's fills. The
+// severity classes are then the only thing painted inside the perimeter, so ground that barely
+// burned — and ground MTBS never assessed — falls through to the map itself rather than to the
+// fire's flare fill. That is what makes the holes read as holes.
+//
+// One year's two layers, changed once on a click, and the previous filters are kept verbatim
+// rather than rebuilt, so this cannot drift if those filters ever change.
+let sevMask = null;
+function maskFire(k, id) {
+  unmaskFire();
+  if (k < 0 || !layers[k]) return;
+  const ids = [layers[k], rxLayers[k]];
+  sevMask = { ids, filters: ids.map(i => map.getFilter(i)) };
+  ids.forEach((i, n) => map.setFilter(i, ['all', sevMask.filters[n], ['!=', ['get', 'id'], id]]));
+}
+function unmaskFire() {
+  if (!sevMask) return;
+  sevMask.ids.forEach((i, n) => map.setFilter(i, sevMask.filters[n]));
+  sevMask = null;
+}
+
 function clearSeverity() {
   if (!sevShown) return;
   sevShown = null;
+  unmaskFire();
   map.getSource(SEV_SRC)?.setData(NOTHING);
-  map.setPaintProperty('sel-unmapped', 'fill-opacity', 0);
-  for (const s of SEV) map.setPaintProperty(s.id, 'fill-opacity', 0);
+  for (const s of SEV_FILLS) map.setPaintProperty(s.id, 'fill-opacity', 0);
 }
 
 // One small gzipped GeoJSON per fire, fetched the first time that fire is asked for and kept
 // after — a second click on the same burn costs nothing. A fire whose file is missing is
 // treated as a fire with no severity rather than an error: the build simply had nothing to
 // write for it, which is the ordinary case for the newest season.
-async function showSeverity(id) {
+async function showSeverity(id, year) {
   sevShown = id;
+  maskFire(years.indexOf(year), id);
   if (TILES) {
     // One filter change per click, on a vector source that only holds what is on screen. That
     // is not the thing the no-data-driven-paint rule is about — it costs a re-evaluation of a
     // few tiles, once, on a deliberate user action, not work per frame.
-    for (const s of SEV) {
+    for (const s of SEV_FILLS) {
       map.setFilter(s.id, ['all', ['==', ['get', 'sev'], s.c], ['==', ['get', 'id'], id]]);
       map.setPaintProperty(s.id, 'fill-opacity', s.op);
     }
-    map.setPaintProperty('sel-unmapped', 'fill-opacity', 0.92);
     dlog(`severity ${id}: from tiles`);
     return;
   }
@@ -1002,8 +1024,7 @@ async function showSeverity(id) {
   }
   if (sevShown !== id) return;                     // something else was clicked while fetching
   map.getSource(SEV_SRC).setData(fc);
-  map.setPaintProperty('sel-unmapped', 'fill-opacity', 0.92);
-  for (const s of SEV) map.setPaintProperty(s.id, 'fill-opacity', s.op);
+  for (const s of SEV_FILLS) map.setPaintProperty(s.id, 'fill-opacity', s.op);
   dlog(`severity ${id}: ${fc.features.length} polygons`);
 }
 
@@ -1013,11 +1034,13 @@ function severityLine(sev) {
   if (!Array.isArray(sev)) return '';
   // Each share in its own class colour, straight off the map ramp (#17), so the number and the
   // ground it describes are the same hue and the popup needs no legend of its own.
+  // Class 1 is not drawn, so it gets the dim ink rather than a swatch colour that appears
+  // nowhere on the map. The share is still worth reporting; it just is not a key to anything.
   const parts = SEV.map((s, i) => ({ pct: sev[i] || 0, label: s.label, color: s.color }))
     .filter(p => p.pct >= 1)
     .sort((a, b) => b.pct - a.pct)
     .slice(0, 3)
-    .map(p => `<span style="color:${p.color}">${p.pct}% ${p.label}</span>`);
+    .map(p => `<span style="color:${p.color || 'var(--dim)'}">${p.pct}% ${p.label}</span>`);
   return parts.length ? `<br><span class="sev-tag">${parts.join(' &middot; ')}</span>` : '';
 }
 
@@ -1065,18 +1088,24 @@ function showTrackPopup(feature, lngLat) {
 // works without a hover state, which a phone does not have.
 //
 // The ramp substitutes for the fire's own fill rather than adding a fourth hue to the app:
-// cool slate for ground that barely burned, through amber and orange to deep red. Green is
-// kept out of it — mint already means "your GPX track" — except for the rare class 5, which is
-// literally "greener afterwards than before" and gets a teal that no line is ever drawn in.
+// amber through orange to deep red. Ground that barely burned gets no colour at all, so it is
+// a hole onto the map instead of a fourth shade to tell apart. Green is kept out — mint already
+// means "your GPX track" — except for the rare class 5, which is literally "greener afterwards
+// than before" and gets a teal that no line is ever drawn in.
 // ---------------------------------------------------------------------------
 const SEV_SRC = 'severity';
+// Class 1 has no colour because it is not drawn at all. Ground that barely burned should look
+// like ground, so it is left as a hole onto the map rather than given a shade of its own — and
+// a class nobody can see needs no entry in the legend. It keeps its label, because the share
+// is still a real fact about the fire and the popup still reports it.
 const SEV = [
-  { c: 1, id: 'sev-1', color: '#4a5a6b', op: 0.80, label: 'unburned to low' },
+  { c: 1, id: 'sev-1', color: null, op: 0,    label: 'unburned to low' },
   { c: 2, id: 'sev-2', color: '#b98a3e', op: 0.85, label: 'low' },
   { c: 3, id: 'sev-3', color: '#e0662a', op: 0.88, label: 'moderate' },
   { c: 4, id: 'sev-4', color: '#c62020', op: 0.92, label: 'high' },
   { c: 5, id: 'sev-5', color: '#4f9d8a', op: 0.85, label: 'increased greenness' }
 ];
+const SEV_FILLS = SEV.filter(s => s.color);        // the ones that become layers
 let sevShown = null;                     // the fire id whose overlay is on the map, if any
 const sevCache = new Map();              // id -> FeatureCollection, so a re-click is instant
 
@@ -1680,16 +1709,16 @@ function wireControls() {
       // accumulated view that would ring thousands of burns at once and say nothing, so there
       // you find out by clicking. Repeat mode is excluded because it is a different axis: its
       // features are reburn counts rather than fires, and carry no sev_ok to test.
-      if (mode !== 'repeat' && p.sev_ok) showSeverity(p.id);
+      if (mode !== 'repeat' && p.sev_ok)
+        showSeverity(p.id, +(p.year ?? String(p.ig_date).slice(0, 4)));
     }
     // Stroke the shape being described, from the full original geometry rather than the clipped
     // copy the query returned.
     //
     // Tiled has no full geometry to reach for: a vector tile holds each fire cut at tile edges.
-    // Gathering every rendered piece of the clicked fire gives back its whole shape as a *fill*
-    // — seamless, because the pieces abut — which is what `sel-unmapped` needs so severity gaps
-    // read as unmapped. The outline is the casualty: stroking each piece would draw tile-edge
-    // seams straight across the fire, so it is switched off rather than drawn wrong.
+    // Gathering every rendered piece of the clicked fire gives back its whole shape, seamless
+    // because the pieces abut. The outline is the casualty: stroking each piece would draw
+    // tile-edge seams straight across the fire, so it is switched off rather than drawn wrong.
     let feature;
     if (rep) {
       feature = repeats[p.rid];
@@ -1906,16 +1935,11 @@ bootstrap.then(({ fc, summary }) => {
   // queryRenderedFeatures is clipped at tile edges, which would stroke only part of a big burn.
   // Added last, so it sits above every year layer.
   map.addSource('sel', { type: 'geojson', data: NOTHING });
-  // Ground under a severity overlay that MTBS did not map. Without it the fire's own flare
-  // fill shows through wherever a severity polygon pulled back from the perimeter under
-  // simplification, and a band of pale yellow around the edge reads as a severity class of its
-  // own. This paints the clicked fire out first, so absence looks like absence. It rides on
-  // the `sel` source, which already holds exactly that one fire's full geometry — no filter
-  // change, so no relayout.
-  map.addLayer({
-    id: 'sel-unmapped', type: 'fill', source: 'sel',
-    paint: { 'fill-color': '#141922', 'fill-opacity': 0 }
-  });
+  // There used to be a near-opaque fill here, painting the clicked fire out so that ground MTBS
+  // never assessed did not show the fire's own flare colour and read as a severity class. It is
+  // gone: maskFire() now takes the fire out of its year's fills outright, which does the same
+  // job without putting anything over the map — so unassessed ground and barely-burned ground
+  // are both simply holes onto the basemap.
   map.addLayer({
     id: 'sel-line', type: 'line', source: 'sel',
     paint: { 'line-color': '#fff2b0', 'line-width': 2, 'line-opacity': 0.95 }
@@ -1931,7 +1955,7 @@ bootstrap.then(({ fc, summary }) => {
   // polygons are already on screen and only need to be filtered to the clicked fire. Otherwise
   // it is the per-fire file the geojson path downloads on demand.
   if (!TILES) map.addSource(SEV_SRC, { type: 'geojson', data: NOTHING });
-  for (const s of SEV) {
+  for (const s of SEV_FILLS) {
     map.addLayer({
       id: s.id, type: 'fill',
       source: TILES ? 'fires' : SEV_SRC,
@@ -1956,11 +1980,12 @@ bootstrap.then(({ fc, summary }) => {
   });
 
   // Reference features on top of the fills rather than under them. They arrive with the basemap
-  // style, so insertion order buries them beneath every fire layer — and beneath `sel-unmapped`,
-  // which is 0.92 opaque, so a selected fire hides its own roads, rivers and place names
-  // completely. That is the wrong way round for planning a way in: the road through a burn is
-  // most worth seeing exactly where it burned hardest, and a name is what tells you where you
-  // are looking. Lifted to just under the GPX tracks, which stay topmost.
+  // style, so insertion order buries them beneath every fire layer, and a selected fire hid its
+  // own roads, rivers and place names completely. That is the wrong way round for planning a way
+  // in: the road through a burn is most worth seeing exactly where it burned hardest, and a name
+  // is what tells you where you are looking. Lifted to just under the GPX tracks, which stay
+  // topmost — which is also what lets the unpainted severity classes read as map rather than as
+  // a gap, since the linework still crosses them.
   //
   // Array order is stacking order — each moves to immediately below TRACK_CASE, so the last
   // listed ends up highest. Water under roads under names, the usual reading order.
