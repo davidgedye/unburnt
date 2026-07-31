@@ -65,36 +65,13 @@ build_year() {
   fi
   local t0=$SECONDS
   local dir="$ROOT/pipeline/data/mosaic$y" tif="$ROOT/pipeline/data/mosaic$y/mtbs_CONUS_$y.tif"
-  local downloaded=0
+  local downloaded=0 have_sev=0
 
-  if [ ! -f "$tif" ]; then
-    local url
-    url=$(python3 -c "import json;print(json.load(open('$URLS')).get('$y',''))")
-    [ -z "$url" ] && { log "$y  no mosaic URL — skipped"; return 1; }
-    mkdir -p "$dir"
-    log "$y  downloading mosaic"
-    # --fail so an HTTP error is caught here rather than saved as a .zip and discovered at
-    # unzip time. ScienceBase serves a 404 HTML page with a 200-shaped body otherwise.
-    if ! curl -sSL --fail --max-time 1800 --retry 3 -o "$dir/m.zip" "$url"; then
-      log "$y  download FAILED (HTTP error)"; rm -rf "$dir"; return 1
-    fi
-    # A zero-byte or absurdly small archive means ScienceBase has the file registered but empty
-    # — which is genuinely the case for some years. Catch it here with a clear reason.
-    if [ "$(stat -c%s "$dir/m.zip")" -lt 100000 ]; then
-      log "$y  download FAILED (archive is $(stat -c%s "$dir/m.zip") bytes — upstream file is empty)"
-      rm -rf "$dir"; return 1
-    fi
-    if ! unzip -o -q -j "$dir/m.zip" -d "$dir"; then
-      # A truncated or corrupt download inflates part-way and leaves a plausible .tif behind.
-      log "$y  unzip FAILED (corrupt download) — discarding"
-      rm -rf "$dir"; return 1
-    fi
-    rm -f "$dir/m.zip"
-    [ -f "$tif" ] || { log "$y  no CONUS tif after unzip"; return 1; }
-    downloaded=1
-  fi
-
-  # Perimeters at full fidelity — no -simplify. tippecanoe does the generalising, per zoom.
+  # Perimeters first, and unconditionally. They come out of the shapefile and owe the mosaic
+  # nothing, so a year whose mosaic cannot be downloaded still has all its fires. Doing this
+  # after the download once cost 2004 and 2017 their perimeters entirely -- 644 fires that
+  # simply were not on the map, which is far worse than the missing severity it was meant to
+  # be about (#16).
   log "$y  perimeters"
   rm -f "$WORK/p.geojson"
   ogr2ogr -f GeoJSON "$WORK/p.geojson" -t_srs EPSG:4326 \
@@ -106,13 +83,49 @@ build_year() {
             AND ig_date >= '$y-01-01' AND ig_date <= '$y-12-31'" \
     "$ROOT/pipeline/data/perimeters/mtbs_perims_DD.shp" 2>/dev/null || { log "$y  ogr2ogr FAILED"; return 1; }
 
-  log "$y  severity"
+  # Severity needs the mosaic, and only severity does. Every failure below is a `severity: no`
+  # for the year, not a reason to abandon it.
   rm -f "$WORK/s.geojson" "$WORK/stats.json"
-  python3 "$ROOT/pipeline/severity-full.py" "$y" "$WORK/s.geojson" "$WORK/stats.json" \
-    2>&1 | grep -viE 'deprecat|warnings.warn' || { log "$y  severity FAILED"; return 1; }
+  if [ -f "$tif" ]; then
+    have_sev=1
+  else
+    local url
+    url=$(python3 -c "import json;print(json.load(open('$URLS')).get('$y',''))")
+    if [ -z "$url" ]; then
+      log "$y  no mosaic URL — perimeters only"
+    else
+      mkdir -p "$dir"
+      log "$y  downloading mosaic"
+      # --fail so an HTTP error is caught here rather than saved as a .zip and discovered at
+      # unzip time. ScienceBase serves a 404 HTML page with a 200-shaped body otherwise.
+      if ! curl -sSL --fail --max-time 1800 --retry 3 -o "$dir/m.zip" "$url"; then
+        log "$y  download FAILED (HTTP error) — perimeters only"; rm -rf "$dir"
+      # A zero-byte or absurdly small archive means ScienceBase has the file registered but
+      # empty — which is genuinely the case for some years. Catch it with a clear reason.
+      elif [ "$(stat -c%s "$dir/m.zip")" -lt 100000 ]; then
+        log "$y  download FAILED (archive is $(stat -c%s "$dir/m.zip") bytes — upstream file is empty) — perimeters only"
+        rm -rf "$dir"
+      # A truncated or corrupt download inflates part-way and leaves a plausible .tif behind.
+      elif ! unzip -o -q -j "$dir/m.zip" -d "$dir"; then
+        log "$y  unzip FAILED (corrupt download) — perimeters only"; rm -rf "$dir"
+      elif [ ! -f "$tif" ]; then
+        log "$y  no CONUS tif after unzip — perimeters only"
+      else
+        rm -f "$dir/m.zip"; downloaded=1; have_sev=1
+      fi
+    fi
+  fi
 
-  # `sev_ok` and the class breakdown ride on the perimeter, exactly as they do today, so the
-  # One-year outline still knows which fires have data without touching the severity layer.
+  if [ "$have_sev" = 1 ]; then
+    log "$y  severity"
+    python3 "$ROOT/pipeline/severity-full.py" "$y" "$WORK/s.geojson" "$WORK/stats.json" \
+      2>&1 | grep -viE 'deprecat|warnings.warn' || { log "$y  severity FAILED"; return 1; }
+  fi
+
+  # `sev_ok` and the class breakdown ride on the perimeter, so the One-year outline knows which
+  # fires have data without touching the severity layer. With no stats file every fire in the
+  # year is tagged sev_ok:false, which is exactly right — the fires are there, the severity is
+  # not, and the popup says so.
   python3 "$ROOT/pipeline/attach-severity.py" --inplace "$WORK/p.geojson" "$WORK/stats.json" \
     || { log "$y  attach FAILED"; return 1; }
 
