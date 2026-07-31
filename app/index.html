@@ -236,6 +236,17 @@
     .maplibregl-ctrl-scale::after { right: 0; }
     /* Two classes deep, to beat MapLibre's own corner margin at the same specificity. */
     .maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale { margin: 0 0 12px 14px; }
+    /* Zoom readout, riding just above the scale in the same corner and borrowing its whole
+       treatment — same mono face, same opacity, same shadow. It is a diagnostic for judging how
+       severity resolves against zoom, not a feature: no box, no ticks, nothing to press. */
+    #zoomro {
+      position: absolute; bottom: 33px; left: 14px; z-index: 2;
+      color: var(--ink); opacity: .6;
+      font: 600 10px/1.3 ui-monospace, monospace; letter-spacing: .03em;
+      white-space: nowrap;
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,.85));
+      pointer-events: none;              /* the map underneath stays clickable through it */
+    }
     .maplibregl-popup-content { background: #12161d; color: var(--ink);
       border-radius: 8px; border: 1px solid rgba(255,255,255,.12); }
     .maplibregl-popup-content b { color: #fff; }
@@ -254,6 +265,7 @@
 </head>
 <body>
 <div id="map"></div>
+<div id="zoomro" aria-hidden="true"></div>
 <div id="loading" class="panel">Loading fire history&hellip;</div>
 <!-- Only ever visible while a file is being dragged over the window. -->
 <div id="drop" hidden><div id="drop-msg" class="panel">Drop a GPX file to put your track on the map</div></div>
@@ -553,6 +565,13 @@ const map = new maplibregl.Map({
 // even take pointer events. Without it there is no way to read distance off a map whose zoom
 // spans a continent and a hillside. Bottom-left is the only corner nothing else claims.
 map.addControl(new maplibregl.ScaleControl({ maxWidth: 96, unit: 'imperial' }), 'bottom-left');
+// Zoom readout above the scale. Two decimals because the questions it answers are about where
+// detail changes — which tile zoom is serving, whether a layer's stops land where intended — and
+// those turn on fractions. 'zoom' rather than 'zoomend', so it tracks a pinch as it happens.
+const zoomro = document.getElementById('zoomro');
+const showZoom = () => { zoomro.textContent = 'z ' + map.getZoom().toFixed(2); };
+map.on('zoom', showZoom);
+showZoom();
 const about = document.getElementById('about');
 const infoBtn = document.getElementById('info-btn');
 function showAbout(open = about.hidden) {
@@ -745,23 +764,28 @@ function paint() {
   labelHandle();
 }
 
-// The one way the mode ever changes, whether it came from a button, the handle tap or `m`.
+// The one way the mode ever changes, whether it came from a button or `m`.
 function setMode(m) {
   if (!MODES.includes(m)) return;
   // Choosing a view parks the run, like every other deliberate act here — a click on the map,
   // a grab of the rail, a dropped track. Asking for one year and watching it keep marching
   // through the others is not what the button says it does.
   //
-  // This used to be `if (mode === 'repeat')`, which left the other two playing. The handle tap
-  // looked fine only by accident: the rail pauses in its own pointerdown, before this runs. So
-  // the same request behaved differently depending on which control you asked with, and the
-  // keyboard `m` matched neither. Pausing here is the one place that covers all three.
+  // This used to be `if (mode === 'repeat')`, which left the other two playing, and the keyboard
+  // `m` matched neither. Pausing here is the one place that covers every way in.
   // The pause is *before* the "already on that view" check, not after: pressing All years
   // during the opening run is a request to stop and look, even though the view does not change.
   pause();
   // (pause() also picks up the repeat asset and any unmeasured tracks, first time through)
   if (m === mode) return;                            // nothing else to do; it is already on show
   mode = m;
+  // Where the rail lands on arrival (#19). Leaving All years for One year keeps the year you
+  // were on: the accumulated view was already drawn up to it, so it is the one you meant, and
+  // moving it would answer a question nobody asked. The other two directions have no such
+  // continuity to preserve — All years is about the whole record, so it opens at the end of it,
+  // and Repeats is a different axis entirely, where the only sensible start is the lowest stop.
+  if (m === 'all') idx = N - 1;
+  else if (m === 'repeat') lvl = 0;                  // levels is ascending, so [0] is the 2+ floor
   clearSeverity();                     // it only ever made sense in the view being left
   closePopup();                                      // it may describe a fire no longer drawn
   paint();
@@ -822,7 +846,7 @@ function labelHandle() {
     rep ? `Burned ${levels[lvl] ?? 2} or more times` : (years[idx] ?? ''));
   r.setAttribute('aria-label', rep ? 'Repeat burn level' : 'Year');
   // The buttons are chrome for the same state, so they are re-stated here rather than set by
-  // whichever thing happened to change the mode — the handle tap and `m` update them too.
+  // whichever thing happened to change the mode — `m` and ?mode= update them too.
   modeBtns.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
 }
 
@@ -949,11 +973,13 @@ async function showSeverity(id) {
 // this needs no fetch and is right even before the overlay lands.
 function severityLine(sev) {
   if (!Array.isArray(sev)) return '';
-  const parts = SEV.map((s, i) => ({ pct: sev[i] || 0, label: s.label }))
+  // Each share in its own class colour, straight off the map ramp (#17), so the number and the
+  // ground it describes are the same hue and the popup needs no legend of its own.
+  const parts = SEV.map((s, i) => ({ pct: sev[i] || 0, label: s.label, color: s.color }))
     .filter(p => p.pct >= 1)
     .sort((a, b) => b.pct - a.pct)
     .slice(0, 3)
-    .map(p => `${p.pct}% ${p.label}`);
+    .map(p => `<span style="color:${p.color}">${p.pct}% ${p.label}</span>`);
   return parts.length ? `<br><span class="sev-tag">${parts.join(' &middot; ')}</span>` : '';
 }
 
@@ -1514,43 +1540,30 @@ function wireControls() {
     const i = Math.round(p);
     if (i !== railIdx()) { if (mode === 'repeat') setLevel(i); else show(i); }
   };
-  // A press that starts on the handle might be a tap (cycle the mode) or the start of a drag, and
-  // which one it is is not known until the pointer moves or lets go. So it is held: the year is
-  // not moved until the press travels far enough to be a drag. Pressing the bare rail is
-  // unambiguous and still jumps straight to that year.
-  const TAP_MS = 250, TAP_SLOP = 5;
-  let pending = null;
-  const onHandle = (x, y) => {
-    const b = document.getElementById('year').getBoundingClientRect();
-    return x >= b.left - 6 && x <= b.right + 6 && y >= b.top - 6 && y <= b.bottom + 6;
-  };
+  // The rail scrubs, and does nothing else (#18). A press used to be held to see whether it
+  // became a drag or stayed a tap, because a tap on the handle cycled the view — but a control
+  // that changes the axis it is measuring, on a gesture nothing announces, costs more confusion
+  // than it saves reach. The view is the three buttons in the panel. So every press is a drag
+  // from the first frame, wherever on the rail it starts, and the handle no longer needs to be
+  // told apart from the strip it slides on.
   r.addEventListener('pointerdown', e => {
     // A popup describes one year's fire; scrubbing away from that year makes it stale, and it
     // would sit over the map with its outline pointing at nothing.
     closePopup();
     pause(); r.setPointerCapture(e.pointerId);
-    if (onHandle(e.clientX, e.clientY)) pending = { t: performance.now(), y: e.clientY };
-    else { dragging = true; track(e.clientY); }
+    dragging = true; track(e.clientY);
     e.preventDefault();
   });
-  r.addEventListener('pointermove', e => {
-    if (pending && Math.abs(e.clientY - pending.y) > TAP_SLOP) { pending = null; dragging = true; }
-    if (dragging) track(e.clientY);
-  });
-  const end = (e, released) => {
+  r.addEventListener('pointermove', e => { if (dragging) track(e.clientY); });
+  const end = e => {
     if (r.hasPointerCapture(e.pointerId)) r.releasePointerCapture(e.pointerId);
-    if (pending) {
-      const wasTap = released && performance.now() - pending.t < TAP_MS;
-      pending = null;
-      if (wasTap) { cycleMode(); return; }            // never travelled, so no year to settle
-    }
     if (!dragging) return;
     dragging = false;
     moveHandle(railIdx());                           // settle onto the stop it landed on
     syncURL();
   };
-  r.addEventListener('pointerup', e => end(e, true));
-  r.addEventListener('pointercancel', e => end(e, false));
+  r.addEventListener('pointerup', end);
+  r.addEventListener('pointercancel', end);
 
   // Keys drive whichever axis the rail is on, so the same four keys scrub years or levels.
   const goTo = i => { closePopup(); pause(); snapTo(i); };
@@ -1560,7 +1573,7 @@ function wireControls() {
     if (step) goTo(railIdx() + step);
     else if (e.key === 'Home') goTo(0);
     else if (e.key === 'End') goTo(railN() - 1);
-    else if (e.key === 'm' || e.key === 'M') { cycleMode(); }   // the tap, for keyboard users
+    else if (e.key === 'm' || e.key === 'M') { cycleMode(); }   // cycle views without leaving the rail
     else return;
     syncURL();
     e.preventDefault();
@@ -1875,6 +1888,20 @@ bootstrap.then(({ fc, summary }) => {
     paint: { 'line-color': '#5ef2a8',
              'line-width': ['interpolate', ['linear'], ['zoom'], 4, 1.4, 10, 2.4, 16, 4] }
   });
+
+  // Reference features on top of the fills rather than under them. They arrive with the basemap
+  // style, so insertion order buries them beneath every fire layer — and beneath `sel-unmapped`,
+  // which is 0.92 opaque, so a selected fire hides its own roads, rivers and place names
+  // completely. That is the wrong way round for planning a way in: the road through a burn is
+  // most worth seeing exactly where it burned hardest, and a name is what tells you where you
+  // are looking. Lifted to just under the GPX tracks, which stay topmost.
+  //
+  // Array order is stacking order — each moves to immediately below TRACK_CASE, so the last
+  // listed ends up highest. Water under roads under names, the usual reading order.
+  for (const id of ['waterway-river', 'waterway-minor',
+                    'road-major', 'road-secondary', 'road-minor',
+                    'place-dot', 'place-major', 'place-minor'])
+    if (map.getLayer(id)) map.moveLayer(id, TRACK_CASE);
 
   peakAcres = Math.max(...acresByYear) || 1;
   wireControls();
