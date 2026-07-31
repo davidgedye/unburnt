@@ -19,7 +19,7 @@ both directions. Geometry spot-checks come after, and pick their fires by acreag
 
 Usage: verify-tiles.py            # exits non-zero on any failure
 """
-import gzip, json, math, os, struct, sys
+import concurrent.futures, gzip, hashlib, json, os, re, struct, sys, urllib.error, urllib.request
 from collections import Counter, defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,6 +28,92 @@ SRC = f'{ROOT}/app/data/west_fires.geojson.gz'
 # Years whose severity is known to be unobtainable upstream (#16). Listed rather than inferred,
 # so that a year going missing for a new reason is a failure and not a silently widened rule.
 SEV_GAP = {2004, 2017}
+APP = f'{ROOT}/app/index.html'
+
+
+def bucket_base():
+    """The bucket the app actually reads, taken from the app rather than repeated here — a
+    manifest check against the wrong bucket is worse than none."""
+    m = re.search(r": '(https://[^']+)'\)\.replace", open(APP).read())
+    return m.group(1) if m else None
+
+
+# Cloudflare answers 403 to urllib's default `Python-urllib/3.x`, which arrives here looking
+# exactly like an unreachable bucket — a check that skips itself and reports success. Any honest
+# User-Agent is accepted.
+UA = 'unburnt-verify/1.0 (+https://github.com/davidgedye/unburnt)'
+
+
+def head(url):
+    req = urllib.request.Request(url, method='HEAD', headers={'User-Agent': UA})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return int(r.headers.get('Content-Length', -1)), (r.headers.get('ETag') or '').strip('"')
+
+
+def md5(path):
+    h = hashlib.md5()
+    with open(path, 'rb') as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def check_remote(fails, warns):
+    """Every local artefact, byte-for-byte against what the bucket serves.
+
+    Worth its own section because the tilesets are replaced by object upload with no deploy, so
+    nothing in git or in CI says whether the bucket matches the build. That is exactly how a
+    corrected perimeters.pmtiles could sit on disk while the old one kept being served.
+
+    R2 returns the MD5 as the ETag for single-part uploads, so this compares content and not
+    merely length. Multipart ETags carry a `-partcount` suffix and cannot be compared that way;
+    those fall back to size, and say so.
+    """
+    base = bucket_base()
+    if not base:
+        warns.append('could not find the bucket URL in app/index.html — skipped the remote check')
+        return
+    local = [('perimeters.pmtiles', f'{OUT}/perimeters.pmtiles')]
+    for f in sorted(os.listdir(f'{OUT}/severity')):
+        if f.endswith('.pmtiles') and not f.endswith('.building.pmtiles'):
+            local.append((f'severity/{f}', f'{OUT}/severity/{f}'))
+    local = [(k, p) for k, p in local if os.path.exists(p)]
+    print()
+    print(f'remote: {base}  ({len(local)} objects)')
+
+    def one(item):
+        key, path = item
+        try:
+            size, etag = head(f'{base}/{key}')
+        except urllib.error.HTTPError as e:
+            return key, f'HTTP {e.code}'
+        except Exception as e:
+            return key, f'{type(e).__name__}'
+        want = os.path.getsize(path)
+        if size != want:
+            return key, f'size {size:,} on the bucket, {want:,} on disk'
+        if '-' in etag:
+            return key, None          # multipart ETag: size matched, content cannot be hashed
+        if etag and etag != md5(path):
+            return key, 'content differs (ETag does not match local MD5)'
+        return key, None
+
+    try:
+        head(f'{base}/perimeters.pmtiles')
+    except Exception as e:
+        warns.append(f'bucket unreachable ({type(e).__name__}) — remote check skipped, not failed')
+        print('  unreachable; skipped')
+        return
+
+    bad = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        for key, err in ex.map(one, local):
+            if err:
+                bad.append(f'{key}: {err}')
+    for b in bad:
+        fails.append(f'bucket out of step — {b}')
+    print(f'  {len(local) - len(bad)}/{len(local)} match the build byte for byte'
+          + ('' if not bad else f'  <-- {len(bad)} WRONG'))
 
 
 def varint(b, p):
@@ -241,6 +327,8 @@ def main():
     fails += bad
     print(f'geometry spot-check on each year\'s largest fire: {len(biggest) - len(bad)}'
           f'/{len(biggest)} pass')
+
+    check_remote(fails, warns)
 
     print()
     for w in warns:
