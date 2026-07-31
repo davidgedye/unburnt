@@ -861,6 +861,7 @@ function labelHandle() {
   el.classList.toggle('at-min', i <= 0);             // 1984 / 2×: only the up arrow
   el.classList.toggle('at-max', M > 0 && i >= M - 1);     // 2024 / 9×: only the down arrow
   updateStat();
+  warmSeverity();
   const r = rail();
   r.setAttribute('aria-valuemin', 0);
   r.setAttribute('aria-valuemax', Math.max(0, M - 1));
@@ -1022,6 +1023,27 @@ function useSeverityYear(y) {
     }, before);
   }
   sevYear = y;
+}
+
+// Mounting a PMTiles source is three serialised round trips before a single tile arrives —
+// header, then root directory, then the tiles — and R2 answers each in about 300 ms. That is the
+// second of dead air between clicking a fire and its severity appearing, and none of it is the
+// tiles being large.
+//
+// In Single Year the year is settled long before the click, so the source is mounted as soon as
+// the rail stops moving and the click costs only a setFilter. Debounced, and never while the run
+// is playing, or scrubbing the rail would mount a source per year passed through.
+//
+// The trade is real: this fetches the viewport's severity for a year that may never be clicked,
+// a couple of hundred KB, against a second of dead time on every first click of a season. Only
+// in Single Year, where the year is unambiguous — in Accumulation the clicked fire could be any
+// of forty-one, so there is nothing to guess.
+let warmTimer = null;
+function warmSeverity() {
+  clearTimeout(warmTimer);
+  if (mode !== 'year' || raf) return;
+  const y = years[idx];
+  warmTimer = setTimeout(() => { if (mode === 'year' && !raf) useSeverityYear(y); }, 200);
 }
 
 function showSeverity(id, year) {
