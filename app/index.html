@@ -43,29 +43,22 @@
     }
     #title.open #head { flex: 0 0 auto; }    /* the heading keeps its height; #about absorbs the rest */
     #title b { color: #fff; font-size: 15px; }
-    /* Year stat: the current year's fires/acres, written over a bar whose width tracks acres
-       against the 41-year peak. `min-width` (not `width`) is what drives it — the panel itself is
-       unsized (shrink-to-fit), so growing this row's floor is what grows the whole panel around
-       it. `background-size` fills only that same width with colour; a year's numbers can run on
-       past a short bar onto plain background, which is fine — the text-shadow keeps them legible
-       either way. Solid `--hot`, the same colour the year handle uses: one accent in the app,
-       not two. */
+    /* The stat row: what is on the map right now, in words. This used to be written over a bar
+       whose width tracked acres against the 41-year peak, which read as decoration competing
+       with the map's own use of the same accent. The numbers say it; the bar only distracted.
+       The buttons underneath still give the panel a stable minimum width, so dropping the bar's
+       `min-width` costs nothing in jitter. */
     #stat {
       position: relative; margin-top: 6px; padding: 4px 8px; border-radius: 4px;
       background-color: rgba(255,255,255,.05);
-      background-image: linear-gradient(90deg, var(--hot), var(--hot));
-      background-repeat: no-repeat; background-position: left;
-      background-size: var(--fill, 0px) 100%;
       font: 600 12px/1.4 ui-monospace, monospace; color: var(--ink); white-space: nowrap;
       text-shadow: 0 1px 2px rgba(0,0,0,.6);
-      transition: min-width .2s ease-out;
     }
-    /* The three views, said out loud. Tapping the year handle still cycles them — this is what
-       teaches that gesture, not a replacement for it. It sits directly under the stat row
-       because choosing Repeats rewrites that row, and the adjacency is what makes the
-       connection legible. A side effect worth having: it gives the panel a stable minimum
-       width, so scrubbing years no longer jitters the whole panel as the bar grows and
-       shrinks. */
+    /* The three views, said out loud, and the only way to change view by pointer. Ordered as
+       they narrow: one year, then every year up to it, then only the ground that burned more
+       than once. It sits directly under the stat row because each view rewrites that row, and
+       the adjacency is what makes the connection legible. A side effect worth having: it gives
+       the panel a stable minimum width, so scrubbing years does not jitter the whole panel. */
     #modes {
       display: flex; margin-top: 8px; padding: 2px; gap: 2px;
       background: rgba(255,255,255,.05); border-radius: 6px;
@@ -278,9 +271,9 @@
     <b>Wildfires of the West</b>
     <div id="stat">loading…</div>
     <div id="modes" role="group" aria-label="View">
-      <button type="button" data-mode="all" aria-pressed="true">All years</button>
-      <button type="button" data-mode="year" aria-pressed="false">One year</button>
-      <button type="button" data-mode="repeat" aria-pressed="false">Repeats</button>
+      <button type="button" data-mode="year" aria-pressed="false">Single Year</button>
+      <button type="button" data-mode="all" aria-pressed="true">Accumulation</button>
+      <button type="button" data-mode="repeat" aria-pressed="false">Repetition</button>
     </div>
     <!-- Your own tracks. Nothing here is uploaded: the file is read in the browser and stays
          there, which is the whole answer to #11's question about server state. -->
@@ -535,8 +528,12 @@ const DEBUG = q.has('debug');
 // Display modes, cycled by tapping the year handle. 'all' accumulates every year up to the one
 // on show and fades the older ones; 'year' shows that season alone; 'repeat' leaves the
 // timeline entirely and shows where the same ground has burned more than once.
-const MODES = ['all', 'year', 'repeat'];
-let mode = MODES.includes(q.get('mode')) ? q.get('mode') : 'all';
+// Listed in the order the buttons are, so `m` cycles the way the eye reads. Which one the app
+// opens on is a separate question from where it sits in the row, so it is named rather than
+// implied by being first — Accumulation is the opening view, and the one the URL omits.
+const MODES = ['year', 'all', 'repeat'];
+const DEFAULT_MODE = 'all';
+let mode = MODES.includes(q.get('mode')) ? q.get('mode') : DEFAULT_MODE;
 const YEAR_MS = 750;                       // one year per 0.75s of screen time
 
 function dlog(...a) { if (DEBUG) console.log(`[${BUILD}]`, ...a); }
@@ -853,31 +850,37 @@ function labelHandle() {
 }
 
 // --- The stat row -----------------------------------------------------------
-// One row, one shape, whichever axis the rail is on: a headline number written over a bar
-// whose width is that number against the largest the axis reaches. On the timeline it is the
-// year's fires and acres against the 41-year peak; in repeat mode it is the acreage at or
-// above the chosen level, against the acreage at level 2 — so the bar visibly collapses as
-// the handle climbs, which is the whole point being made.
-let acresByYear = [], firesByYear = [], sevByYear = [], peakAcres = 1;
+// One row of plain text, saying what is actually on the map. Each view reports its own subject,
+// because each one draws a different thing (#23): Accumulation has every year up to the handle
+// on screen, so it totals them; Single Year has exactly one, so it reports that one; Repetition
+// is not measured in years at all, so it names the threshold instead.
+//
+// Reporting a single year's numbers under an accumulated map was the bug worth fixing: the
+// figures described a slice of what you were looking at. There used to be a bar behind them
+// too, sized against the 41-year peak — dropped as decoration competing with the map for the
+// same accent.
+let acresByYear = [], firesByYear = [], sevByYear = [];
+// Running totals, so Accumulation reports everything up to the year on show without re-summing
+// 41 years on every frame of the opening run.
+let acresCum = [], firesCum = [];
 // Years whose severity is missing because the source could not be had, rather than because it
 // has not been assessed yet — two very different admissions, and the popup makes each of them.
 // Filled once the year list is known; see the note in build-year-summary.py.
 let sevGap = new Set();
 const stat = document.getElementById('stat');
 const modeBtns = [...document.querySelectorAll('#modes button')];
-const STAT_BAR_MIN = 14, STAT_BAR_MAX = 240;   // px; drives both the fill and the panel's floor
 
 function updateStat() {
   const rep = mode === 'repeat';
-  const acres = rep ? (acresFrom[lvl] || 0) : (acresByYear[idx] || 0);
-  const peak = rep ? (acresFrom[0] || 1) : peakAcres;
-  const px = Math.round(STAT_BAR_MIN + (STAT_BAR_MAX - STAT_BAR_MIN) * (acres / peak));
-  stat.style.setProperty('--fill', px + 'px');
-  stat.style.minWidth = px + 'px';
+  const acres = rep ? (acresFrom[lvl] || 0)
+                    : ((mode === 'all' ? acresCum[idx] : acresByYear[idx]) || 0);
+  if (!rep && !N) return;                      // nothing loaded yet; the markup already says so
   stat.textContent = rep
-    ? (acresFrom.length ? `burned ${levels[lvl]}+ times · ${acres.toLocaleString()} acres`
+    ? (acresFrom.length ? `Burned ${levels[lvl]}+ times: ${Math.round(acres).toLocaleString()} acres`
                         : 'loading\u2026')          // the asset is still on its way
-    : `${(firesByYear[idx] || 0).toLocaleString()} fires · ${Math.round(acresByYear[idx] || 0).toLocaleString()} acres`;
+    : `${mode === 'all' ? 'Up to ' : ''}${years[idx]}: `
+      + `${((mode === 'all' ? firesCum[idx] : firesByYear[idx]) || 0).toLocaleString()} fires, `
+      + `${Math.round(acres).toLocaleString()} acres burned`;
 }
 
 function posAtY(clientY) {
@@ -1437,7 +1440,7 @@ function syncURL() {
     // Only a parked year is worth sharing. Mid-run the year is a moving target, and a link
     // carrying one would open on a stopped animation instead of playing.
     if (raf) p.delete('year'); else p.set('year', years[idx]);
-    if (mode === MODES[0]) p.delete('mode'); else p.set('mode', mode);
+    if (mode === DEFAULT_MODE) p.delete('mode'); else p.set('mode', mode);
     // The level is a count (2..9), not an index — the two datasets number them differently.
     if (mode === 'repeat' && lvl > 0) p.set('level', levels[lvl]); else p.delete('level');
     history.replaceState(null, '', location.pathname + '?' + p);
@@ -1785,6 +1788,12 @@ bootstrap.then(({ fc, summary }) => {
   sevGap = sevByYear.length === N
     ? new Set(years.filter((y, k) => !sevByYear[k] && y < years[N - 1] - 1))
     : new Set();
+  // Running totals for Accumulation, computed once rather than per frame.
+  firesCum = []; acresCum = [];
+  for (let k = 0, f = 0, a = 0; k < N; k++) {
+    f += firesByYear[k] || 0; a += acresByYear[k] || 0;
+    firesCum[k] = f; acresCum[k] = a;
+  }
 
   if (TILES) {
     map.addSource('fires', { type: 'vector', url: 'pmtiles://' + TILES });
@@ -1929,7 +1938,6 @@ bootstrap.then(({ fc, summary }) => {
                     'place-dot', 'place-major', 'place-minor'])
     if (map.getLayer(id)) map.moveLayer(id, TRACK_CASE);
 
-  peakAcres = Math.max(...acresByYear) || 1;
   wireControls();
   dlog(`${fc ? fc.features.length + ' fires' : 'tiled: ' + TILES}, ${N} yearly states, ` +
        `${layers.length + rxLayers.length} layers`);
