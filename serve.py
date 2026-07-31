@@ -17,8 +17,10 @@ lives outside `app/` precisely because a 1.2 GB tileset is never going to ship a
 asset (it is far past the 25 MiB per-file cap; production reads it from R2).
 
 Usage: python3 serve.py [port]     (default 8090)
-       http://localhost:8090/index.html          the app
-       http://localhost:8090/tiles/west.pmtiles  the local tileset, for testing before upload
+       http://localhost:8090/index.html            the app, reading tiles from R2
+       http://localhost:8090/index.html?tiles=1    the app, reading the local build instead
+       http://localhost:8090/tiles/perimeters.pmtiles
+       http://localhost:8090/tiles/severity/2020.pmtiles
 """
 import os
 import re

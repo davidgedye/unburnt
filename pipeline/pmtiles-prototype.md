@@ -116,7 +116,7 @@ whole thing runs off the one dev server:
 ```
 python3 serve.py
 http://localhost:8090/index.html?tiles=1      the app on the tileset
-http://localhost:8090/tiles/west.pmtiles      the tileset, read by byte range
+http://localhost:8090/tiles/perimeters.pmtiles   read by byte range
 ```
 
 The same fire, one flag apart, is the comparison worth making:
@@ -259,7 +259,7 @@ Steps, in order. **None of these have been run** — the bucket does not exist y
    ```
    npx wrangler r2 bucket create unburnt-tiles
    ```
-2. **Upload `west.pmtiles`.** Check the size limit on `wrangler r2 object put` before relying on
+2. **Upload the tilesets.** *(Done — `pipeline/upload-tiles.sh`; 92 MB went through `wrangler r2 object put` fine.)* Check the size limit on `wrangler r2 object put` before relying on
    it — it has historically capped well under 1 GB, in which case use an S3-compatible client
    (`rclone`, `aws s3`) against R2's S3 endpoint, which does multipart.
 3. **Make it readable.** Either enable the bucket's `r2.dev` subdomain (fine for this) or attach
