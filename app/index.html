@@ -870,17 +870,27 @@ let sevGap = new Set();
 const stat = document.getElementById('stat');
 const modeBtns = [...document.querySelectorAll('#modes button')];
 
+// Rounded to three significant-ish figures with a suffix: this row is read at a glance while
+// the handle is moving, and 120,533,111 is not a number anyone reads at a glance. The threshold
+// is 999,500 rather than a million so that nothing ever renders as "1000K".
+function compact(n) {
+  n = Math.round(n);
+  if (n >= 999500) return Math.round(n / 1e6) + 'M';
+  if (n >= 1000) return Math.round(n / 1000) + 'K';
+  return String(n);
+}
+
 function updateStat() {
   const rep = mode === 'repeat';
   const acres = rep ? (acresFrom[lvl] || 0)
                     : ((mode === 'all' ? acresCum[idx] : acresByYear[idx]) || 0);
   if (!rep && !N) return;                      // nothing loaded yet; the markup already says so
   stat.textContent = rep
-    ? (acresFrom.length ? `Burned ${levels[lvl]}+ times: ${Math.round(acres).toLocaleString()} acres`
+    ? (acresFrom.length ? `Burned ${levels[lvl]}+ times: ${compact(acres)} acres`
                         : 'loading\u2026')          // the asset is still on its way
-    : `${mode === 'all' ? 'Up to ' : ''}${years[idx]}: `
-      + `${((mode === 'all' ? firesCum[idx] : firesByYear[idx]) || 0).toLocaleString()} fires, `
-      + `${Math.round(acres).toLocaleString()} acres burned`;
+    : `${mode === 'all' ? 'To ' : ''}${years[idx]}: `
+      + `${compact((mode === 'all' ? firesCum[idx] : firesByYear[idx]) || 0)} fires, `
+      + `${compact(acres)} acres`;
 }
 
 function posAtY(clientY) {
