@@ -25,7 +25,8 @@ levels than the app shows. Tiles generalise *per zoom*: coarse at z4, full 30 m 
 
 ## What was built
 
-`pipeline/build-pmtiles.sh 2020` — 2020 is the peak year (366 western fires, 9.2 M acres),
+`pipeline/build-pmtiles.sh 2020` *(since deleted — superseded by `build-pmtiles-all.sh`)* —
+2020 is the peak year (366 western fires, 9.2 M acres),
 contains DOLAN, and contains **NORTH**, the 2,030,049-vertex perimeter that trips GDAL's
 per-feature limit. Deliberately the hard case.
 
@@ -99,7 +100,8 @@ that reason alone, and it also cuts ~60% off the tiling time (90 s vs 235 s).
 
 ## What it looks like
 
-`pipeline/pmtiles-proto.html` renders the tileset in the app's own palette and type, so a
+`pipeline/pmtiles-proto.html` *(since deleted — the app itself reads the tilesets now)*
+rendered the tileset in the app's own palette and type, so a
 screenshot from it sits directly next to one from the app. At z13 over DOLAN's coastal edge:
 
 - **shipped**: large angular blobs, the perimeter cutting straight chords across the coastline,
@@ -128,8 +130,8 @@ Byte ranges are the point, not a detail: MapLibre's `pmtiles://` protocol reads 
 by range, which is exactly how it reads from R2 — **no tile server, and still no Worker script**.
 Python's stock `http.server` answers **200 with the whole file** to a Range request, which the
 protocol cannot use; and because a 200 looks healthy, it fails as an unreadable tileset rather
-than an HTTP error. `pipeline/rangeserve.py` is the standalone version, kept for serving the
-prototype viewer (`pmtiles-proto.html`) from `pipeline/`.
+than an HTTP error. There was a standalone `pipeline/rangeserve.py` for the prototype viewer;
+both are gone, and `serve.py` at the repo root handles ranges itself.
 
 ## What this does not fix
 
