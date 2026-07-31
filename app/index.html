@@ -298,9 +298,9 @@
        builds up is the cumulative footprint of four decades of fire.</p>
     <p>Drag the handle on the right to move through time, and click any fire for its name,
        date and size. The three buttons under the title switch what the map is showing:
-       <b>All years</b> builds the record up one season at a time, <b>One year</b> shows a
-       single season on its own, and <b>Repeats</b> leaves the timeline for the question
-       below. Tapping the handle itself cycles the same three, if that is closer to hand.</p>
+       <b>Single Year</b> shows a season on its own, <b>Accumulation</b> builds the record up
+       one season at a time, and <b>Repetition</b> leaves the timeline for the question below.
+       The handle only moves through time; the buttons are what change the view.</p>
     <p>Most of what's mapped is unplanned wildfire, shown in the warm orange&ndash;red ramp.
        About 2% of the burned area, though, is prescribed fire &mdash; deliberately set for
        fuel reduction or habitat management &mdash; shown in purple instead, on the same
@@ -327,10 +327,11 @@
        of them. Zoom in and they are there.</p>
 
     <h4>How hard it burned</h4>
-    <p>A perimeter says a fire reached here; it doesn't say what it did. In <b>One year</b>,
-       fires whose burn severity has been mapped carry a faint outline &mdash; click one and
-       the fire is repainted by severity: amber through orange to deep red where the canopy
-       went. Ground that barely burned is left unpainted, so it reads as holes in the burn
+    <p>A perimeter says a fire reached here; it doesn't say what it did. <b>Single Year</b>
+       repaints every fire MTBS has mapped by severity at once: amber through orange to deep
+       red where the canopy went, against the plain orange of the fires it has not reached yet.
+       In <b>Accumulation</b> that would be four decades of it at once, so there a click asks
+       for one fire. Ground that barely burned is left unpainted, so it reads as holes in the burn
        rather than as a colour of its own, and the popup lists only what you can see.</p>
     <p>Severity is 30&nbsp;m detail about a single fire, so it is offered where it can actually
        be read &mdash; one fire, close up &mdash; rather than as a layer over the whole West,
@@ -796,20 +797,27 @@ function setMode(m) {
   //
   // This used to be `if (mode === 'repeat')`, which left the other two playing, and the keyboard
   // `m` matched neither. Pausing here is the one place that covers every way in.
-  // The pause is *before* the "already on that view" check, not after: pressing All years
+  // The pause is *before* the "already on that view" check, not after: pressing Accumulation
   // during the opening run is a request to stop and look, even though the view does not change.
   pause();
   // (pause() also picks up the repeat asset and any unmeasured tracks, first time through)
   if (m === mode) return;                            // nothing else to do; it is already on show
   mode = m;
-  // Where the rail lands on arrival (#19). Leaving All years for One year keeps the year you
-  // were on: the accumulated view was already drawn up to it, so it is the one you meant, and
-  // moving it would answer a question nobody asked. The other two directions have no such
-  // continuity to preserve — All years is about the whole record, so it opens at the end of it,
-  // and Repeats is a different axis entirely, where the only sensible start is the lowest stop.
+  // Where the rail lands on arrival (#19, #25). Accumulation is about the whole record, so it
+  // opens at the end of it. Repetition is a different axis, where the only sensible start is
+  // the opening stop.
+  //
+  // Single Year keeps whatever year you were on — the accumulated view was already drawn up to
+  // it, so it is the one you meant — unless a fire is actually on show, in which case Single
+  // Year plainly means *that fire's* year, whichever the rail happened to be resting on. Read
+  // before closePopup() below clears the selection.
   if (m === 'all') idx = N - 1;
   else if (m === 'repeat') lvl = startLvl();
-  clearSeverity();                     // it only ever made sense in the view being left
+  else if (m === 'year' && years.indexOf(selYear) >= 0) idx = years.indexOf(selYear);
+  // Entering Single Year on the very year already painted is a widening, not a change of
+  // subject: clearing would unmask the fire, show its plain fill for a frame, and then repaint.
+  // Every other direction is leaving the view the overlay belonged to.
+  if (!(m === 'year' && sevYear === years[idx])) clearSeverity();
   closePopup();                                      // it may describe a fire no longer drawn
   paint();
   moveHandle(railIdx());     // the rail just changed axis; re-place the handle on the new one
@@ -861,7 +869,7 @@ function labelHandle() {
   el.classList.toggle('at-min', i <= 0);             // 1984 / 2×: only the up arrow
   el.classList.toggle('at-max', M > 0 && i >= M - 1);     // 2024 / 9×: only the down arrow
   updateStat();
-  warmSeverity();
+  syncSeverity();
   const r = rail();
   r.setAttribute('aria-valuemin', 0);
   r.setAttribute('aria-valuemax', Math.max(0, M - 1));
@@ -963,7 +971,7 @@ function longDate(iso) {
 
 // Removing the popup fires its close handler, which clears the outline — so this takes down
 // both. Safe to call when nothing is open.
-function closePopup() { if (popup) { popup.remove(); popup = null; } }
+function closePopup() { if (popup) { popup.remove(); popup = null; } selYear = null; }
 
 // --- Severity overlay -------------------------------------------------------
 // Clearing is separate from closePopup(): the popup can go without the overlay going (a click
@@ -977,13 +985,18 @@ function closePopup() { if (popup) { popup.remove(); popup = null; } }
 // One year's two layers, changed once on a click, and the previous filters are kept verbatim
 // rather than rebuilt, so this cannot drift if those filters ever change.
 let sevMask = null;
-function maskFire(k, id) {
+function mask(k, keep) {
   unmaskFire();
   if (k < 0 || !layers[k]) return;
   const ids = [layers[k], rxLayers[k]];
   sevMask = { ids, filters: ids.map(i => map.getFilter(i)) };
-  ids.forEach((i, n) => map.setFilter(i, ['all', sevMask.filters[n], ['!=', ['get', 'id'], id]]));
+  ids.forEach((i, n) => map.setFilter(i, ['all', sevMask.filters[n], keep]));
 }
+// One fire, when Accumulation paints a click. Every mapped fire, when Single Year paints the
+// whole season — otherwise severity would sit on top of the flare fill and the barely-burned
+// holes would show orange instead of the map.
+const maskFire = (k, id) => mask(k, ['!=', ['get', 'id'], id]);
+const maskMapped = k => mask(k, ['!=', ['get', 'sev_ok'], true]);
 function unmaskFire() {
   if (!sevMask) return;
   sevMask.ids.forEach((i, n) => map.setFilter(i, sevMask.filters[n]));
@@ -991,8 +1004,9 @@ function unmaskFire() {
 }
 
 function clearSeverity() {
-  if (!sevShown) return;
+  if (!sevShown && !sevAll) return;
   sevShown = null;
+  sevAll = false;
   unmaskFire();
   // The year's source stays mounted; opacity is the switch, so a second look costs nothing.
   for (const s of SEV_FILLS) map.setPaintProperty(s.id, 'fill-opacity', 0);
@@ -1038,12 +1052,33 @@ function useSeverityYear(y) {
 // a couple of hundred KB, against a second of dead time on every first click of a season. Only
 // in Single Year, where the year is unambiguous — in Accumulation the clicked fire could be any
 // of forty-one, so there is nothing to guess.
-let warmTimer = null;
-function warmSeverity() {
-  clearTimeout(warmTimer);
+// Single Year paints the whole season's severity, not one fire on a click (#26). The year's
+// tileset is already the only thing mounted, so this draws data that is in memory rather than
+// fetching more — and it removes the reason to click at all: what a click adds is the popup.
+//
+// Debounced and skipped while the run is playing, because scrubbing or playing through 41 years
+// would otherwise swap a source per year. Playback clears it per year through show(); this
+// paints it back 200 ms after the handle settles.
+let sevTimer = null;
+function syncSeverity() {
+  clearTimeout(sevTimer);
   if (mode !== 'year' || raf) return;
-  const y = years[idx];
-  warmTimer = setTimeout(() => { if (mode === 'year' && !raf) useSeverityYear(y); }, 200);
+  const k = idx, y = years[k];
+  const paint = () => {
+    if (mode !== 'year' || raf || idx !== k) return;
+    useSeverityYear(y);
+    maskMapped(k);
+    for (const s of SEV_FILLS) {
+      map.setFilter(s.id, ['==', ['get', 'sev'], s.c]);
+      map.setPaintProperty(s.id, 'fill-opacity', s.op);
+    }
+    sevAll = true;
+    dlog(`severity: all of ${y}`);
+  };
+  // The wait is only ever for a source swap. When the year's tileset is already mounted there
+  // is nothing to load, and waiting is precisely what makes a fire drop back to its plain fill
+  // for a moment before severity returns — the flash on entering Single Year from a click.
+  if (sevYear === y) paint(); else sevTimer = setTimeout(paint, 200);
 }
 
 function showSeverity(id, year) {
@@ -1145,6 +1180,9 @@ const SEV = [
 ];
 const SEV_FILLS = SEV.filter(s => s.color);        // the ones that become layers
 let sevShown = null;                     // the fire id whose overlay is on the map, if any
+let sevAll = false;                      // or: the whole season's, in Single Year
+// The year of the fire currently being looked at, so switching to Single Year lands on it (#25).
+let selYear = null;
 
 const TRACK_SRC = 'tracks', TRACK_LAYER = 'track-line', TRACK_CASE = 'track-case';
 // Basemap features that belong above the fire fills rather than under them, in stacking order.
@@ -1715,7 +1753,7 @@ function wireControls() {
     // Close first: removing a popup fires its close handler, which clears the outline. Doing it
     // before the new one is drawn stops the old handler wiping the new selection.
     closePopup();
-    if (!hits.length) { clearSeverity(); return; }
+    if (!hits.length) { if (mode !== 'year') clearSeverity(); selYear = null; return; }
     const p = hits[0].properties;
     // On the timeline, always three lines: name, date, acreage. Assessment is dropped — 62% are
     // "Initial" and the word carries almost no information. Type is dropped too *unless* it's
@@ -1745,15 +1783,17 @@ function wireControls() {
                        : `<br><span class="sev-none">${why}</span>`;
       }
       html = `<b>${p.name}</b><br>${longDate(p.ig_date)}<br>${acres}${rx}${sev}`;
-      clearSeverity();
-      // Severity in the accumulated view too (#22), not only One year. Nothing about the
-      // overlay ever needed the year: it is per-fire, fetched on the click that asks for it.
-      // What stays one-year-only is the *outline* marking which fires have severity — in the
-      // accumulated view that would ring thousands of burns at once and say nothing, so there
-      // you find out by clicking. Repeat mode is excluded because it is a different axis: its
-      // features are reburn counts rather than fires, and carry no sev_ok to test.
-      if (mode !== 'repeat' && p.sev_ok)
-        showSeverity(p.id, +(p.year ?? String(p.ig_date).slice(0, 4)));
+      // Remember which fire is being looked at, so leaving Accumulation for Single Year lands
+      // on its year rather than on whichever the rail happened to be showing (#25).
+      selYear = +(p.year ?? String(p.ig_date).slice(0, 4));
+      // Accumulation paints severity for the fire you clicked (#22). Single Year already has
+      // the whole season painted (#26), so a click there adds the popup and nothing else —
+      // narrowing to one fire would be taking the view away. Repetition is a different axis:
+      // its features are reburn counts, and carry no sev_ok to test.
+      if (mode === 'all') {
+        clearSeverity();
+        if (p.sev_ok) showSeverity(p.id, selYear);
+      }
     }
     // Stroke the shape being described, from the full original geometry rather than the clipped
     // copy the query returned.
