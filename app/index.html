@@ -522,17 +522,24 @@ const DS = DATASETS[q.get('data')] || DATASETS.west;
 // z13. Tiles generalise per zoom and fetch only the viewport, which is both sharper close up
 // and less traffic. See pipeline/pmtiles-prototype.md for the measurements.
 //
-// It is a flag rather than a switch because the tileset is 927 MB and cannot ride along in
-// app/ — production needs it on R2, and until that exists the GeoJSON path stays the default so
-// main is always deployable. ?tiles=<url> points at any other copy.
+// Two products on the bucket, because the app reads them differently:
+//
+//   perimeters.pmtiles       every year in one tileset. The accumulated view lights all 41 at
+//                            once, so they have to share a source.
+//   severity/<year>.pmtiles  one per year, swapped in on demand. Severity is drawn for a single
+//                            fire, and merging all 41 years put 32 fires from five decades into
+//                            every tile in order to draw one — 1.6 MB where 160 KB does.
+//
+// ?tiles=<base> points at any other copy; ?tiles=1 uses the local build through serve.py, which
+// maps /tiles/ to pipeline/data/pmtiles.
 // ---------------------------------------------------------------------------
-const TILES = q.has('tiles')
-  ? (q.get('tiles') === '1' || q.get('tiles') === '' ? 'tiles/west.pmtiles' : q.get('tiles'))
-  : null;
-if (TILES) maplibregl.addProtocol('pmtiles', new pmtiles.Protocol().tile);
-// Spread into every layer built on the `fires` source. A vector source has to be told which
-// layer inside the tile to read; a geojson source must not be given one at all.
-const SRC_LAYER = TILES ? { 'source-layer': 'perimeters' } : {};
+const TILE_BASE = (q.has('tiles')
+  ? (q.get('tiles') === '1' || q.get('tiles') === '' ? 'tiles' : q.get('tiles'))
+  : 'https://pub-91d8a0e3f82342a1a7c1525c5031c69c.r2.dev').replace(/\/+$/, '');
+maplibregl.addProtocol('pmtiles', new pmtiles.Protocol().tile);
+// Spread into every layer built on the `fires` source: a vector source has to be told which
+// layer inside the tile to read.
+const SRC_LAYER = { 'source-layer': 'perimeters' };
 const DEBUG = q.has('debug');
 // Display modes, cycled by tapping the year handle. 'all' accumulates every year up to the one
 // on show and fades the older ones; 'year' shows that season alone; 'repeat' leaves the
@@ -986,46 +993,49 @@ function clearSeverity() {
   if (!sevShown) return;
   sevShown = null;
   unmaskFire();
-  map.getSource(SEV_SRC)?.setData(NOTHING);
+  // The year's source stays mounted; opacity is the switch, so a second look costs nothing.
   for (const s of SEV_FILLS) map.setPaintProperty(s.id, 'fill-opacity', 0);
 }
 
-// One small gzipped GeoJSON per fire, fetched the first time that fire is asked for and kept
-// after — a second click on the same burn costs nothing. A fire whose file is missing is
-// treated as a fire with no severity rather than an error: the build simply had nothing to
-// write for it, which is the ordinary case for the newest season.
-async function showSeverity(id, year) {
+// Severity lives in a tileset per year, so showing a fire means making sure its year is the one
+// sourced, then filtering to that fire. The source is only swapped when the year actually
+// changes, so clicking around within a season costs nothing, and it is left in place on clear —
+// a second look at the same year is instant.
+//
+// MapLibre cannot repoint a source, so a swap is remove-and-add, and the layers on it have to
+// go first and come back in the right place. `before` keeps them under the reference linework,
+// which has to stay on top for the unpainted classes to read as map rather than as a gap.
+let sevYear = null;
+function useSeverityYear(y) {
+  if (sevYear === y) return;
+  for (const s of SEV_FILLS) if (map.getLayer(s.id)) map.removeLayer(s.id);
+  if (map.getSource(SEV_SRC)) map.removeSource(SEV_SRC);
+  sevYear = null;
+  if (y == null) return;
+  map.addSource(SEV_SRC, { type: 'vector', url: `pmtiles://${TILE_BASE}/severity/${y}.pmtiles` });
+  const before = [...REFERENCE_LAYERS, TRACK_CASE].find(id => map.getLayer(id));
+  for (const s of SEV_FILLS) {
+    map.addLayer({
+      id: s.id, type: 'fill', source: SEV_SRC, 'source-layer': 'severity',
+      filter: ['==', ['get', 'sev'], s.c],
+      paint: { 'fill-color': s.color, 'fill-opacity': 0 }
+    }, before);
+  }
+  sevYear = y;
+}
+
+function showSeverity(id, year) {
   sevShown = id;
   maskFire(years.indexOf(year), id);
-  if (TILES) {
-    // One filter change per click, on a vector source that only holds what is on screen. That
-    // is not the thing the no-data-driven-paint rule is about — it costs a re-evaluation of a
-    // few tiles, once, on a deliberate user action, not work per frame.
-    for (const s of SEV_FILLS) {
-      map.setFilter(s.id, ['all', ['==', ['get', 'sev'], s.c], ['==', ['get', 'id'], id]]);
-      map.setPaintProperty(s.id, 'fill-opacity', s.op);
-    }
-    dlog(`severity ${id}: from tiles`);
-    return;
+  useSeverityYear(year);
+  // One filter change per click, on a vector source that only holds what is on screen. That is
+  // not the thing the no-data-driven-paint rule is about — it costs a re-evaluation of a few
+  // tiles, once, on a deliberate user action, not work per frame.
+  for (const s of SEV_FILLS) {
+    map.setFilter(s.id, ['all', ['==', ['get', 'sev'], s.c], ['==', ['get', 'id'], id]]);
+    map.setPaintProperty(s.id, 'fill-opacity', s.op);
   }
-  let fc = sevCache.get(id);
-  if (!fc) {
-    try {
-      fc = await loadGz(`data/severity/${encodeURIComponent(id)}.geojson.gz`);
-      sevCache.set(id, fc);            // only a real answer is worth keeping
-    } catch (err) {
-      // A failure is not an answer. Caching it would turn one bad moment — an edge that has
-      // not got the file yet, a dropped connection — into a fire that silently has no severity
-      // for the rest of the session, however many times it is clicked. Leaving the cache empty
-      // means the next click tries again.
-      dlog(`severity fetch failed for ${id}, will retry: ${err.message}`);
-      fc = NOTHING;
-    }
-  }
-  if (sevShown !== id) return;                     // something else was clicked while fetching
-  map.getSource(SEV_SRC).setData(fc);
-  for (const s of SEV_FILLS) map.setPaintProperty(s.id, 'fill-opacity', s.op);
-  dlog(`severity ${id}: ${fc.features.length} polygons`);
+  dlog(`severity ${id}: year ${year}`);
 }
 
 // The class breakdown, biggest share first, for the popup. `sev` rides on the fire itself, so
@@ -1107,9 +1117,14 @@ const SEV = [
 ];
 const SEV_FILLS = SEV.filter(s => s.color);        // the ones that become layers
 let sevShown = null;                     // the fire id whose overlay is on the map, if any
-const sevCache = new Map();              // id -> FeatureCollection, so a re-click is instant
 
 const TRACK_SRC = 'tracks', TRACK_LAYER = 'track-line', TRACK_CASE = 'track-case';
+// Basemap features that belong above the fire fills rather than under them, in stacking order.
+// Named once because two things need them: the lift below, and the severity layers, which have
+// to be re-inserted beneath them whenever the year's source is swapped.
+const REFERENCE_LAYERS = ['waterway-river', 'waterway-minor',
+                          'road-major', 'road-secondary', 'road-minor',
+                          'place-dot', 'place-major', 'place-minor'];
 const STORE_KEY = 'unburnt.tracks.v1';
 const MI_PER_DEG = 69.0525;                  // latitude degrees to statute miles
 const SAMPLE_MI = 0.025;                     // ~40 m between burn-test samples, up to MAX_SAMPLES
@@ -1374,10 +1389,10 @@ function addTrack(name, segs) {
   const t = { tid: nextTid++, name, segs, pct: 0, burned: '',
               miles: segs.reduce((m, s) => m + segMiles(s), 0) };
   tracks.push(t);
-  // Under tiles the perimeters may still need fetching, so measuring is always deferred; the
-  // same queue and the same flush handle it.
-  if (raf || TILES) unmeasured.push(t); else measure(t);
-  if (TILES && !raf) measurePending();
+  // The perimeters may still need fetching, so measuring is always deferred; the same queue
+  // and the same flush handle it.
+  unmeasured.push(t);
+  if (!raf) measurePending();
   return t;
 }
 
@@ -1722,14 +1737,12 @@ function wireControls() {
     let feature;
     if (rep) {
       feature = repeats[p.rid];
-    } else if (TILES) {
+    } else {
       const parts = map.queryRenderedFeatures({ layers: queryLayers })
         .filter(f => f.properties.id === p.id);
       feature = { type: 'FeatureCollection', features: parts };
-    } else {
-      feature = fires[p.fid];
     }
-    map.setPaintProperty('sel-line', 'line-opacity', TILES && !rep ? 0 : 0.95);
+    map.setPaintProperty('sel-line', 'line-opacity', rep ? 0.95 : 0);
     map.getSource('sel').setData(feature ?? NOTHING);
     const { lngLat, anchor } = popupPlacement(feature, e.lngLat);
     popup = new maplibregl.Popup({ anchor, offset: GAP }).setLngLat(lngLat)
@@ -1797,49 +1810,20 @@ function loadRepeats() {
   }).catch(err => console.error('repeat-burn layer failed to load:', err));
 }
 
-// The two data paths differ only in what they load and how the `fires` source is declared.
-// Everything downstream — 41 years of layers, static filters, constant paint — is identical,
-// which is the point: a vector-tile source takes the same static filters a geojson one does, so
-// none of the animation engine changes and no data-driven paint creeps back in.
-const bootstrap = TILES
-  ? Promise.all([loadJSON(DS.years), new Promise(res => map.on('load', res))])
-      .then(([summary]) => ({ summary }))
-  : Promise.all([loadGz(DS.file), new Promise(res => map.on('load', res))])
-      .then(([fc]) => ({ fc }));
+// A vector source only ever holds what is on screen, so nothing here can aggregate 41 years
+// out of it. The year rail, the stat row and the animation's own state all need those totals
+// before the first frame, so they are precomputed by build-year-summary.py — under a kilobyte
+// against the 3.15 MB of perimeters that used to be downloaded largely to compute them.
+const bootstrap = Promise.all([loadJSON(DS.years), new Promise(res => map.on('load', res))])
+  .then(([summary]) => ({ summary }));
 
-bootstrap.then(({ fc, summary }) => {
+bootstrap.then(({ summary }) => {
   document.getElementById('loading').classList.add('gone');
 
-  if (fc) {
-    const seen = new Set();
-    fc.features.forEach((f, i) => {
-      f.properties.year = +f.properties.ig_date.slice(0, 4);
-      f.properties.fid = i;            // identifies the clicked fire; indexes back into `fires`
-      seen.add(f.properties.year);
-    });
-    fires = fc.features;
-    years = [...seen].sort((a, b) => a - b);
-    // Total acres burned per year. The one feature with no acreage contributes nothing rather
-    // than poisoning its year's total with NaN.
-    const slot = new Map(years.map((y, k) => [y, k]));
-    acresByYear = years.map(() => 0);
-    firesByYear = years.map(() => 0);
-    sevByYear = years.map(() => 0);
-    for (const f of fc.features) {
-      const k = slot.get(f.properties.year);
-      acresByYear[k] += f.properties.acres || 0;
-      firesByYear[k]++;                    // counted even when its acreage is missing
-      if (f.properties.sev_ok) sevByYear[k]++;
-    }
-  } else {
-    // Tiled: a vector source only ever holds what is on screen, so there is nothing here to
-    // aggregate 41 years out of. The same totals are precomputed (build-year-summary.py) —
-    // 720 bytes against the 3.15 MB that was being loaded largely to compute them.
-    years = summary.years;
-    firesByYear = summary.fires;
-    acresByYear = summary.acres;
-    sevByYear = summary.sev || [];
-  }
+  years = summary.years;
+  firesByYear = summary.fires;
+  acresByYear = summary.acres;
+  sevByYear = summary.sev || [];
   N = years.length;
   // A year with no severity at all is an upstream gap if it is old, and simply the assessment
   // lag if it is recent — MTBS runs a season or two behind. The newest two years therefore get
@@ -1855,11 +1839,7 @@ bootstrap.then(({ fc, summary }) => {
     firesCum[k] = f; acresCum[k] = a;
   }
 
-  if (TILES) {
-    map.addSource('fires', { type: 'vector', url: 'pmtiles://' + TILES });
-  } else {
-    map.addSource('fires', { type: 'geojson', data: fc });
-  }
+  map.addSource('fires', { type: 'vector', url: `pmtiles://${TILE_BASE}/perimeters.pmtiles` });
   // Two fill layers per year, added oldest-first so newer fires draw on top: one for
   // prescribed fire, one for everything else (wildfire, wildland fire use, other) — split so
   // each can carry its own constant colour/opacity, rather than a data-driven expression keyed
@@ -1954,16 +1934,6 @@ bootstrap.then(({ fc, summary }) => {
   // Tiled: severity is a layer inside the same tileset, so there is nothing to fetch — the
   // polygons are already on screen and only need to be filtered to the clicked fire. Otherwise
   // it is the per-fire file the geojson path downloads on demand.
-  if (!TILES) map.addSource(SEV_SRC, { type: 'geojson', data: NOTHING });
-  for (const s of SEV_FILLS) {
-    map.addLayer({
-      id: s.id, type: 'fill',
-      source: TILES ? 'fires' : SEV_SRC,
-      ...(TILES ? { 'source-layer': 'severity' } : {}),
-      filter: ['==', ['get', 'sev'], s.c],
-      paint: { 'fill-color': s.color, 'fill-opacity': 0 }
-    });
-  }
 
   map.addSource(TRACK_SRC, { type: 'geojson', data: NOTHING });
   map.addLayer({
@@ -1989,13 +1959,11 @@ bootstrap.then(({ fc, summary }) => {
   //
   // Array order is stacking order — each moves to immediately below TRACK_CASE, so the last
   // listed ends up highest. Water under roads under names, the usual reading order.
-  for (const id of ['waterway-river', 'waterway-minor',
-                    'road-major', 'road-secondary', 'road-minor',
-                    'place-dot', 'place-major', 'place-minor'])
+  for (const id of REFERENCE_LAYERS)
     if (map.getLayer(id)) map.moveLayer(id, TRACK_CASE);
 
   wireControls();
-  dlog(`${fc ? fc.features.length + ' fires' : 'tiled: ' + TILES}, ${N} yearly states, ` +
+  dlog(`tiles: ${TILE_BASE}, ${N} yearly states, ` +
        `${layers.length + rxLayers.length} layers`);
   const jump = years.indexOf(+q.get('year'));        // ?year=1995 parks there, for sharing/testing
   // Repeat mode is outside the timeline, so it never plays; it parks on the last year, which
