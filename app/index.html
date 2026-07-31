@@ -43,14 +43,16 @@
     }
     #title.open #head { flex: 0 0 auto; }    /* the heading keeps its height; #about absorbs the rest */
     #title b { color: #fff; font-size: 15px; }
-    /* The stat row: what is on the map right now, in words. This used to be written over a bar
-       whose width tracked acres against the 41-year peak, which read as decoration competing
-       with the map's own use of the same accent. The numbers say it; the bar only distracted.
-       The buttons underneath still give the panel a stable minimum width, so dropping the bar's
-       `min-width` costs nothing in jitter. */
+    /* The stat row: what is on the map right now, in words. Deliberately unstyled — no fill, no
+       border, no padding box. It carried a faint panel background and rounded corners, which in
+       a column of controls reads as a field you could type into, and it is the one thing here
+       that is purely output. Plain text on the panel says that by saying nothing.
+
+       It used to sit above the buttons and be written over a bar sized against the 41-year
+       peak; the bar competed with the map for the same accent, and the position put the answer
+       before the question. */
     #stat {
-      position: relative; margin-top: 6px; padding: 4px 8px; border-radius: 4px;
-      background-color: rgba(255,255,255,.05);
+      margin-top: 6px;
       font: 600 12px/1.4 ui-monospace, monospace; color: var(--ink); white-space: nowrap;
       text-shadow: 0 1px 2px rgba(0,0,0,.6);
     }
@@ -80,7 +82,10 @@
        Deliberately quiet: this is the viewer's data, not the map's, so it gets a text button
        rather than anything that competes with the three views above it. The row only exists
        once a file has been read; before that there is just the one line offering it. */
-    #gpx { margin-top: 8px; }
+    /* A clear line of space above the tracks, so the stat row reads as belonging to the buttons
+       it reports on rather than heading the section below it. 8px of ordinary spacing plus one
+       blank line of the stat row's own 12px/1.4. */
+    #gpx { margin-top: 25px; }
     #gpx-add {
       display: block; width: 100%; padding: 3px 0; border: 0; background: none;
       color: var(--dim); font: 500 11.5px/1.4 system-ui, sans-serif; text-align: left;
@@ -269,12 +274,15 @@
   <div id="head">
     <button id="info-btn" aria-label="About this map" aria-expanded="false" aria-controls="about">i</button>
     <b>Wildfires of the West</b>
-    <div id="stat">loading…</div>
     <div id="modes" role="group" aria-label="View">
       <button type="button" data-mode="year" aria-pressed="false">Single Year</button>
       <button type="button" data-mode="all" aria-pressed="true">Accumulation</button>
       <button type="button" data-mode="repeat" aria-pressed="false">Repetition</button>
     </div>
+    <!-- Below the buttons, because it reports what they selected: the control comes first, then
+         its answer. aria-live so a screen reader hears the new figures on a view change or a
+         scrub, which it otherwise would not — nothing here moves focus. -->
+    <div id="stat" aria-live="polite">loading&hellip;</div>
     <!-- Your own tracks. Nothing here is uploaded: the file is read in the browser and stays
          there, which is the whole answer to #11's question about server state. -->
     <div id="gpx">
