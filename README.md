@@ -11,12 +11,15 @@ four decades of burning. Burn **severity** data is kept for a future at-rest vie
 > The repo name is a holdover from the project's earlier framing as a hike-planning tool. A
 > rename is deferred until the visualization settles.
 
-## Status (2026-07-27)
+## Status (2026-07-31)
 
 Working app covering **all 11 Western states, 1984–2024** — see `app/`:
 
-- **Data:** **11,377 fires** (`app/data/west_fires.geojson.gz`, 2.8 MB gzipped / 11.5 MB raw),
-  from the MTBS perimeter shapefile with ignition dates, acreage, and assessment type. The
+- **Data:** **11,377 fires** from the MTBS perimeter shapefile with ignition dates, acreage
+  and assessment type, served as a vector tileset from R2 (see "Hosting"). The app loads under
+  a kilobyte of per-year totals up front instead of the whole record;
+  `app/data/west_fires.geojson.gz` (2.8 MB) is still shipped and still fetched, but only on
+  demand, because GPX burn history is point-in-polygon against every perimeter. The
   643-fire WA slice is kept as a lighter dataset (`?data=wa`). Datasets ship gzipped and are
   inflated in the browser, so no server config is needed. Geometry is simplified to ~200 m —
   **17.8 M vertices → 478 k (−97.3%) for 0.44% area distortion**, sub-pixel at the zooms the
@@ -34,30 +37,44 @@ Working app covering **all 11 Western states, 1984–2024** — see `app/`:
   map that isn't data, and it takes no pointer events.
 - **Animation:** **41 yearly states, 0.75 s each (~31 s)**, playing on load. The year rail down
   the right edge scrubs and snaps to whole years; grabbing it is the pause.
-- **Three views**, named in the title panel — *All years* (every year up to the one on show,
-  fading with age), *One year* (that season alone) and *Repeats*. Tapping the year handle
-  cycles the same three, as does `m`. In *Repeats* the rail stops carrying years and carries
-  **repeat level** instead: 2× at the bottom up to 9× at the top, each stop showing every patch
-  that has burned that many times *or more*. A click parks the animation on the year it is
-  showing and names the fire you clicked; pan and zoom work at all times, playing or paused.
+- **Three views**, named in the title panel — *Single Year* (that season alone),
+  *Accumulation* (every year up to the one on show, fading with age; the opening view) and
+  *Repetition*. They are the only pointer route between views: the rail scrubs and does nothing
+  else. `m` cycles them from the keyboard. In *Repetition* the rail stops carrying years and
+  carries **repeat level**, opening at 3× and running to 9×, each stop showing every patch that
+  has burned that many times *or more*. A click parks the animation on the year it is showing
+  and names the fire you clicked; pan and zoom work at all times, playing or paused.
+- **The stat row** under the buttons reports whatever is actually drawn: `To 2020: 10K fires,
+  106M acres` accumulating, `2020: 366 fires, 9.2M acres` for one season, `Burned 3+ times: …`
+  in *Repetition*.
 
 - **Your own GPX tracks** — drag a `.gpx` file onto the map (or use the button in the panel)
   and the route is drawn over the fire record, with a click reporting how much of it has burned
   since 1984 and which fires did it. **Nothing is uploaded**: the file is parsed in the browser
   and stays there, remembered only by that browser's `localStorage`. This is what keeps the app
   a static asset deploy with no Worker script, no database and no accounts (#11).
+  Press `p` for the **Pacific Crest Trail** — the real thing from OpenStreetMap, as its 29
+  official sections, 2,567 of the trail's ~2,650 miles. The same 29 are served at
+  `/pct/<section>.gpx` at full resolution if you want to carry them.
 
-- **Burn severity** — in *One year*, fires whose severity MTBS has mapped carry a faint
-  outline; click one and it is repainted by severity (slate → amber → orange → red), with the
-  class split in the popup. **10,505 of 11,377 fires (92%)** have it; 2024 is mostly unmapped
-  because MTBS assesses a season or two behind, which the outline makes visible rather than
-  something you discover by clicking. 20.6 MB across per-fire files, fetched one at a time.
+- **Burn severity** — click any fire that has it and it is repainted by severity, amber
+  through orange to deep red. Ground that barely burned is **left unpainted**, so it reads as
+  holes in the burn with the roads and rivers still crossing them, rather than as a colour of
+  its own. In *Single Year* the fires that have severity carry a faint outline, so nobody clicks
+  and hopes; in *Accumulation* you find out by clicking. **10,505 of 11,377 fires (92%)** have it.
+  A fire with none says either *severity not yet mapped* (MTBS assesses a season or two behind)
+  or *severity not currently available* — the second means the year was assessed but its mosaic
+  cannot be downloaded, which is true of 2004 and 2017 (#16) and is decided from the data rather
+  than a hardcoded list.
 
 Run it locally: `npm run dev` (or `python3 serve.py`) → `http://localhost:8090/index.html`
 (URL params: `?data=west|wa`, `?lng=&lat=&z=`, `?year=1995`, `?mode=year|repeat`, `?level=4`,
-`?debug=1`).
+`?debug=1`). Tiles come from R2 even locally; add **`?tiles=1`** to read the local build in
+`pipeline/data/pmtiles` instead, or `?tiles=<base>` for any other copy.
 Use `serve.py` rather than `python3 -m http.server`: it sends `no-store`, so a reload always
 picks up the latest build. Cross-check the `build N` stamp in the title panel.
+
+**Live at <https://unburnt.davidgedye.workers.dev>.**
 
 **Deploy:** automatic — every push to `main` triggers `.github/workflows/deploy.yml`, which
 deploys to Cloudflare. Manual runs are available from the Actions tab. `npm run deploy` still
@@ -144,8 +161,53 @@ is why `serve.py` lives at the repo root rather than inside it.
 - **Caching:** Workers static assets default to `Cache-Control: public, max-age=0,
   must-revalidate`, so browsers revalidate before use. That's what this project wants, so there
   is no `_headers` file.
-- **Asset limits to remember:** 20,000 files and **25 MiB per file**. The current datasets
-  (2.8 MB + 672 KB) are fine; a large PMTiles archive is not, which is what R2 is for.
+- **Asset limits to remember:** 20,000 files and **25 MiB per file**. The datasets and the 29
+  PCT tracks are fine; 1.2 GB of tilesets is not, which is what R2 is for.
+
+### The tilesets, on R2
+
+Bucket **`unburnt-tiles`**, public at
+`https://pub-91d8a0e3f82342a1a7c1525c5031c69c.r2.dev`, read directly by the browser over byte
+ranges — no Worker script and no tile server. Two products, because the app reads them
+differently:
+
+| | |
+|---|---|
+| `perimeters.pmtiles` | all 41 years, 92 MB. *Accumulation* lights every year at once, so they must share a source. |
+| `severity/<year>.pmtiles` | 39 files, 1.1 GB, mounted on demand when the year changes. |
+
+Severity is **per year and not merged**, which is the whole design. Merged, a single z9 tile
+over DOLAN held 13,046 severity polygons from 32 fires across five decades — 1.6 MB fetched so
+the app could draw one of them. Per year the same tile is 157 KB. That also retired the old z9
+floor: severity now starts at z2, because a fire's z6 tile turns out *smaller* than its z9 one.
+
+**CORS matters and fails invisibly.** `range` must be an allowed request header and
+`content-range` an exposed one, or the browser blocks the range requests and the tileset fails
+looking like a corrupt file rather than a missing header. The rules are in
+`pipeline/r2-cors.json` and use R2's own schema, not S3's, which wrangler rejects.
+
+## Rebuilding the data
+
+Needs the user-space GIS toolchain (`~/tools/envs/gis`) — the scripts set `PATH`, `PROJ_DATA`
+and `GDAL_DATA` themselves.
+
+```
+pipeline/fetch-mosaics.sh                # hold every severity mosaic locally (see below)
+pipeline/build-pmtiles-all.sh            # ~4-5 h, resumable; perimeters + per-year severity
+pipeline/build-fires.sh                  # the GeoJSON the GPX walk still needs
+pipeline/build-year-summary.py           # the per-year totals the app loads up front
+pipeline/verify-tiles.py                 # reconcile against the source, and against the bucket
+pipeline/upload-tiles.sh                 # push to R2 (needs `npx wrangler login`)
+```
+
+Replacing an object on R2 takes effect immediately — **no deploy is involved**, which is why
+`verify-tiles.py` also checks the bucket byte-for-byte against the build.
+
+**Keep the mosaics.** They are the one input that cannot be recomputed, and they perish: 2004
+and 2017 are advertised in ScienceBase's metadata and 404 on fetch (#16), so their severity can
+never be rebuilt from source. 39 of 41 are held locally (~7.5 GB) precisely so a future re-tile —
+a different zoom, sieve or format — does not depend on ScienceBase still having them. Re-tiling
+is not hypothetical: moving severity to z2 meant rebuilding all 41 years.
 
 ## Files
 
@@ -160,7 +222,23 @@ is why `serve.py` lives at the repo root rather than inside it.
   visualization needs a bland *vector* base, which is Option B/C in that doc.
 - `pipeline/pipeline-validation.md` — the 2026-07-23 end-to-end vectorization run (WA × 2023/24)
   that proved the severity pipeline, with timings and the mosaic-lag finding.
-- `app/` — the deployed site: one HTML file plus gzipped GeoJSON datasets (11-state and WA).
-  Everything here is published as-is.
-- `serve.py` — no-cache local dev server (serves `./app`); `wrangler.jsonc`, `package.json` —
-  Cloudflare deploy config.
+- `pipeline/pmtiles-prototype.md` — the milestone-7 experiment that measured what tiling buys.
+  Its three scripts have since been deleted and are marked as such; the measurements still stand
+  and are the argument for the current architecture.
+- `app/` — the deployed site: one HTML file, the gzipped GeoJSON datasets, the PCT bundle and
+  the 29 per-section GPX files. Everything here is published as-is.
+- `serve.py` — no-cache local dev server (serves `./app`, handles byte ranges so `?tiles=1`
+  reaches the local build); `wrangler.jsonc`, `package.json` — Cloudflare deploy config.
+
+### Pipeline
+
+| | |
+|---|---|
+| `build-pmtiles-all.sh` | the tilesets: perimeters merged, severity per year, both z2–z13 |
+| `severity-full.py` | one year's severity polygons and class stats out of its mosaic |
+| `attach-severity.py` | stamps `sev_ok` and the class split onto perimeters |
+| `build-fires.sh`, `build-repeats.sh`, `build-year-summary.py` | the GeoJSON datasets and totals |
+| `build-pct.py` | the Pacific Crest Trail from OSM, as GPX per section plus a simplified bundle |
+| `fetch-mosaics.sh` | hold every severity mosaic locally; reports any newly unobtainable |
+| `verify-tiles.py`, `verify-repeats.py` | reconcile the built data against its sources |
+| `upload-tiles.sh`, `r2-cors.json` | publish to R2 |
