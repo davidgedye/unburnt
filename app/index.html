@@ -1632,7 +1632,13 @@ function wireControls() {
       }
       html = `<b>${p.name}</b><br>${longDate(p.ig_date)}<br>${acres}${rx}${sev}`;
       clearSeverity();
-      if (mode === 'year' && p.sev_ok) showSeverity(p.id);
+      // Severity in the accumulated view too (#22), not only One year. Nothing about the
+      // overlay ever needed the year: it is per-fire, fetched on the click that asks for it.
+      // What stays one-year-only is the *outline* marking which fires have severity — in the
+      // accumulated view that would ring thousands of burns at once and say nothing, so there
+      // you find out by clicking. Repeat mode is excluded because it is a different axis: its
+      // features are reburn counts rather than fires, and carry no sev_ok to test.
+      if (mode !== 'repeat' && p.sev_ok) showSeverity(p.id);
     }
     // Stroke the shape being described, from the full original geometry rather than the clipped
     // copy the query returned.
