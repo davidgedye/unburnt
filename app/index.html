@@ -1254,7 +1254,10 @@ function renderTrackList() {
 // remembering is lost, so it fails quietly rather than taking the feature down with it.
 function saveTracks() {
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(tracks.map(t => ({
+    // Only what someone actually brought. The PCT is marked ephemeral: it is 52,308 points that
+    // are already a static asset, so storing a copy per browser would be pure waste, and
+    // restoring it would turn an easter egg into a fixture nobody asked to keep.
+    localStorage.setItem(STORE_KEY, JSON.stringify(tracks.filter(t => !t.ephemeral).map(t => ({
       name: t.name,
       segs: t.segs.map(s => s.map(([x, y]) => [+x.toFixed(5), +y.toFixed(5)]))
     }))));
@@ -1365,36 +1368,20 @@ async function addFiles(files) {
 }
 
 // --- Easter egg: press 'p' for the Pacific Crest Trail ----------------------
-// Hand-plotted through the trail's well-known landmarks (Campo, Kennedy Meadows, Tuolumne
-// Meadows, Crater Lake, Cascade Locks, Manning Park...) rather than a surveyed GPS trace —
-// this is a joke, not a data source, but it runs through the exact same burn-history walk as
-// a real upload, against real fire history along the real corridor. One entry per commonly
-// recognized region, same as a multi-track GPX file already becomes several entries.
-const PCT_SEGMENTS = [
-  { name: 'PCT — Southern California', pts: [
-    [-116.4694, 32.5895], [-116.4300, 32.8642], [-116.6300, 33.2900], [-116.6800, 33.7500],
-    [-116.9114, 34.2439], [-117.6081, 34.3836], [-118.3115, 34.4919], [-118.4970, 35.0864],
-    [-118.0300, 35.6500], [-118.1394, 35.9931]
-  ] },
-  { name: 'PCT — Sierra Nevada', pts: [
-    [-118.1394, 35.9931], [-118.4325, 36.6349], [-118.6800, 37.2500], [-119.0800, 37.6100],
-    [-119.3505, 37.8742], [-119.6046, 38.3242], [-120.0324, 38.8366]
-  ] },
-  { name: 'PCT — Northern California', pts: [
-    [-120.0324, 38.8366], [-120.6310, 39.5657], [-121.2833, 40.0089], [-121.6558, 41.0130],
-    [-122.3186, 41.2438], [-122.8973, 41.4576], [-122.7108, 42.1946]
-  ] },
-  { name: 'PCT — Oregon', pts: [
-    [-122.7108, 42.1946], [-122.1685, 42.9446], [-122.1700, 43.1600], [-122.0400, 43.6000],
-    [-121.7700, 44.1000], [-121.8000, 44.6740], [-121.7100, 45.3311], [-121.8931, 45.6693]
-  ] },
-  { name: 'PCT — Washington', pts: [
-    [-121.8931, 45.6693], [-121.3900, 46.6360], [-121.4136, 47.4231], [-121.0890, 47.7451],
-    [-120.6683, 48.3078], [-120.7300, 48.5100], [-120.7734, 49.0000]
-  ] }
-];
+// The real trail, out of OpenStreetMap's PCT superroute, as its 29 official sections —
+// California A–R, Oregon B–G, Washington H–L, the same lettering the guidebooks use. Built by
+// pipeline/build-pct.py and simplified to about 10 m, which keeps 2,567 of the trail's 2,623
+// mapped miles in 300 KB.
+//
+// It used to be forty waypoints typed in from memory of the landmarks, which came out at 1,336
+// miles — half the trail — because straight lines between Campo, Kennedy Meadows and Crater
+// Lake cut every switchback. It crossed real fires more by luck of passing through the right
+// corridors than by following the tread.
+//
+// Nothing here is special-cased: the sections go through addTrack exactly as a dropped GPX file
+// does, and each one's burn history is measured the same way yours is.
 let pctLoaded = false;
-function loadPCT() {
+async function loadPCT() {
   // Fires the moment 'p' is pressed, which could be before the fire data itself has loaded —
   // measuring against an empty `fires` would cache a permanently-empty fire grid (see
   // buildFireGrid). Rather than let that happen, just ignore the keypress until data is ready;
@@ -1402,10 +1389,22 @@ function loadPCT() {
   if (pctLoaded || !fires.length) return;
   pctLoaded = true;
   pause();
-  for (const s of PCT_SEGMENTS) addTrack(s.name, [s.pts]);
-  drawTracks();
+  let fc;
+  try {
+    fc = await loadGz('data/pct.geojson.gz');
+  } catch (err) {
+    pctLoaded = false;                 // a dropped connection should not burn the keypress
+    dlog('PCT load failed: ' + err.message);
+    return;
+  }
   const b = new maplibregl.LngLatBounds();
-  for (const s of PCT_SEGMENTS) for (const c of s.pts) b.extend(c);
+  for (const f of fc.features) {
+    // MultiLineString coordinates are already the shape addTrack wants: one entry per run of
+    // trail, drawn with no line across the breaks between them.
+    addTrack(f.properties.name, f.geometry.coordinates).ephemeral = true;
+    for (const seg of f.geometry.coordinates) for (const c of seg) b.extend(c);
+  }
+  drawTracks();
   map.fitBounds(b, { padding: 40, duration: 700 });
 }
 
