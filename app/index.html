@@ -331,7 +331,7 @@
        fires whose burn severity has been mapped carry a faint outline &mdash; click one and
        the fire is repainted by severity: amber through orange to deep red where the canopy
        went. Ground that barely burned is left unpainted, so it reads as holes in the burn
-       rather than as a colour of its own. The popup gives the split, that share included.</p>
+       rather than as a colour of its own, and the popup lists only what you can see.</p>
     <p>Severity is 30&nbsp;m detail about a single fire, so it is offered where it can actually
        be read &mdash; one fire, close up &mdash; rather than as a layer over the whole West,
        and each fire's data is only fetched when you ask for it.</p>
@@ -340,7 +340,7 @@
        genuinely has none rather than having failed to load. A few older fires say
        <i>severity not currently available</i> instead: those were assessed, but the published
        data for their year cannot presently be obtained. The percentages are shares of the area
-       MTBS actually assessed.</p>
+       MTBS assessed, and do not add to a hundred: the barely-burned share is not among them.</p>
 
     <h4>Your own tracks</h4>
     <p>Drag a GPX file anywhere onto the map, or use <b>+ Add a GPX track</b> under the title,
@@ -1066,14 +1066,20 @@ function severityLine(sev) {
   if (!Array.isArray(sev)) return '';
   // Each share in its own class colour, straight off the map ramp (#17), so the number and the
   // ground it describes are the same hue and the popup needs no legend of its own.
-  // Class 1 is not drawn, so it gets the dim ink rather than a swatch colour that appears
-  // nowhere on the map. The share is still worth reporting; it just is not a key to anything.
+  // Only the classes that are actually painted. This line is a key to the colours on the map,
+  // so a class drawn as a hole has nothing to key: naming it would send you looking for a shade
+  // that is not there. `i` still indexes SEV, because `sev` is positional — filtering on colour
+  // rather than slicing the array is what keeps those lined up.
   const parts = SEV.map((s, i) => ({ pct: sev[i] || 0, label: s.label, color: s.color }))
-    .filter(p => p.pct >= 1)
+    .filter(p => p.color && p.pct >= 1)
     .sort((a, b) => b.pct - a.pct)
     .slice(0, 3)
-    .map(p => `<span style="color:${p.color || 'var(--dim)'}">${p.pct}% ${p.label}</span>`);
-  return parts.length ? `<br><span class="sev-tag">${parts.join(' &middot; ')}</span>` : '';
+    .map(p => `<span style="color:${p.color}">${p.pct}% ${p.label}</span>`);
+  // Two fires in the record are 100% unburned-to-low. With that class dropped they would have
+  // nothing to say, and a mapped fire that says nothing reads exactly like an unmapped one —
+  // so say the thing outright rather than leave the silence ambiguous.
+  if (!parts.length) return '<br><span class="sev-none">barely burned throughout</span>';
+  return `<br><span class="sev-tag">${parts.join(' &middot; ')}</span>`;
 }
 
 // Track names and fire names both end up inside a popup's HTML, and a track name came out of
