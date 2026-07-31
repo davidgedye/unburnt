@@ -657,6 +657,10 @@ const { COLOR: RX_COLOR, OPACITY: RX_OPACITY } = buildRamp([
 // ---------------------------------------------------------------------------
 const REPEAT_BASE = '#7a2a16', REPEAT_BASE_OP = 0.30;    // burned once — context, not subject
 const REPEAT_MAX = 9;
+// Where the rail lands when Repetition is chosen. Not the bottom stop: twice-burned ground is
+// so much of the West that 2+ looks like the accumulated map with a different palette. Three
+// is where the picture starts being about reburn rather than about fire.
+const REPEAT_START = 3;
 const REPEAT_RAMP = {           // count -> [colour, opacity]
   2: ['#a83615', 0.62],
   3: ['#cf5418', 0.72],
@@ -680,6 +684,10 @@ let years = [], layers = [], rxLayers = [], N = 0, idx = 0, raf = null, fires = 
 // level apart is what lets the rail carry one of them without destroying the other, so leaving
 // repeat mode puts you back on the year you left.
 let repLayers = [], repRings = [], repeats = [], levels = [2], lvl = 0, acresFrom = [];
+// `levels` comes from the data and is a stub until the repeat asset lands, so the starting stop
+// has to be looked up rather than hardcoded as an index — and falls back to the bottom for a
+// dataset that never reaches 3× at all.
+const startLvl = () => Math.max(0, levels.indexOf(REPEAT_START));
 let sevLayers = [];                        // per-year outline marking fires that have severity
 // ?level=4 opens on that level. It names a count, not an index — indexes shift between the
 // two datasets — so it can only be resolved once the data says which counts exist.
@@ -784,7 +792,7 @@ function setMode(m) {
   // continuity to preserve — All years is about the whole record, so it opens at the end of it,
   // and Repeats is a different axis entirely, where the only sensible start is the lowest stop.
   if (m === 'all') idx = N - 1;
-  else if (m === 'repeat') lvl = 0;                  // levels is ascending, so [0] is the 2+ floor
+  else if (m === 'repeat') lvl = startLvl();
   clearSeverity();                     // it only ever made sense in the view being left
   closePopup();                                      // it may describe a fire no longer drawn
   paint();
@@ -1743,8 +1751,10 @@ function loadRepeats() {
       for (let i = 0; i <= at; i++) acresFrom[i] += f.properties.acres || 0;
     }
     map.getSource('repeats').setData(rc);
+    // The axis only now has its real length. An explicit ?level= wins; otherwise land on the
+    // starting stop, which could not be resolved earlier because `levels` was still the stub.
     const asked = levels.indexOf(wantLevel);
-    lvl = asked >= 0 ? asked : Math.min(lvl, levels.length - 1);   // axis now has its real length
+    lvl = asked >= 0 ? asked : startLvl();
     if (mode === 'repeat') { paint(); moveHandle(lvl); }
     dlog(`${rc.features.length} repeat-burn polygons, levels ${levels.join(',')}`);
   }).catch(err => console.error('repeat-burn layer failed to load:', err));
