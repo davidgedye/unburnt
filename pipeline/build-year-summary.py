@@ -21,12 +21,13 @@ def build(scope):
     with gzip.open(src) as fh:
         fc = json.load(fh)
 
-    acres, count = {}, {}
+    acres, count, sev = {}, {}, {}
     for f in fc['features']:
         p = f['properties']
         y = int(p['ig_date'][:4])
         acres[y] = acres.get(y, 0) + (p.get('acres') or 0)
         count[y] = count.get(y, 0) + 1          # counted even when its acreage is missing
+        sev[y] = sev.get(y, 0) + (1 if p.get('sev_ok') else 0)
 
     years = sorted(count)
     out = {
@@ -34,6 +35,12 @@ def build(scope):
         'fires': [count[y] for y in years],
         # Whole acres: the stat bar rounds to integers anyway, and this halves the file.
         'acres': [round(acres[y]) for y in years],
+        # Fires with mapped severity, per year. Carried so the app can tell an upstream gap
+        # apart from the assessment lag: MTBS runs a season or two behind, so a *recent* year
+        # with little or no severity is simply waiting, while an *old* year with none of it at
+        # all means the source mosaic could not be had (#16). Same number either way; only the
+        # app can say which, because only it knows which year is the newest on show.
+        'sev': [sev[y] for y in years],
     }
     dst = os.path.join(ROOT, f'app/data/{scope}_years.json')
     with open(dst, 'w') as fh:

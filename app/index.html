@@ -335,8 +335,10 @@
        and each fire's data is only fetched when you ask for it.</p>
     <p>Not every fire has it. MTBS assesses severity a season or two behind the perimeters, so
        recent fires often have none yet, and a fire that says <i>severity not yet mapped</i>
-       genuinely has none rather than having failed to load. The percentages are shares of the
-       area MTBS actually assessed.</p>
+       genuinely has none rather than having failed to load. A few older fires say
+       <i>severity not currently available</i> instead: those were assessed, but the published
+       data for their year cannot presently be obtained. The percentages are shares of the area
+       MTBS actually assessed.</p>
 
     <h4>Your own tracks</h4>
     <p>Drag a GPX file anywhere onto the map, or use <b>+ Add a GPX track</b> under the title,
@@ -856,7 +858,11 @@ function labelHandle() {
 // year's fires and acres against the 41-year peak; in repeat mode it is the acreage at or
 // above the chosen level, against the acreage at level 2 — so the bar visibly collapses as
 // the handle climbs, which is the whole point being made.
-let acresByYear = [], firesByYear = [], peakAcres = 1;
+let acresByYear = [], firesByYear = [], sevByYear = [], peakAcres = 1;
+// Years whose severity is missing because the source could not be had, rather than because it
+// has not been assessed yet — two very different admissions, and the popup makes each of them.
+// Filled once the year list is known; see the note in build-year-summary.py.
+let sevGap = new Set();
 const stat = document.getElementById('stat');
 const modeBtns = [...document.querySelectorAll('#modes button')];
 const STAT_BAR_MIN = 14, STAT_BAR_MAX = 240;   // px; drives both the fill and the panel's floor
@@ -1625,10 +1631,15 @@ function wireControls() {
       // missing, say so rather than showing nothing and leaving it ambiguous whether the data
       // is absent or the fetch failed; same honest-absence habit as "acreage unknown".
       let sev = '';
-      if (mode === 'year') {
+      if (mode !== 'repeat') {           // wherever the overlay is offered, so is its breakdown
         const list = typeof p.sev === 'string' ? JSON.parse(p.sev) : p.sev;
+        // Two different absences, and saying "not yet mapped" for both would be a lie about
+        // 645 fires: 2004 and 2017 were assessed, their mosaics just cannot be downloaded.
+        const why = sevGap.has(+(p.year ?? String(p.ig_date).slice(0, 4)))
+          ? 'severity not currently available'
+          : 'severity not yet mapped';
         sev = p.sev_ok ? severityLine(list)
-                       : '<br><span class="sev-none">severity not yet mapped</span>';
+                       : `<br><span class="sev-none">${why}</span>`;
       }
       html = `<b>${p.name}</b><br>${longDate(p.ig_date)}<br>${acres}${rx}${sev}`;
       clearSeverity();
@@ -1751,10 +1762,12 @@ bootstrap.then(({ fc, summary }) => {
     const slot = new Map(years.map((y, k) => [y, k]));
     acresByYear = years.map(() => 0);
     firesByYear = years.map(() => 0);
+    sevByYear = years.map(() => 0);
     for (const f of fc.features) {
       const k = slot.get(f.properties.year);
       acresByYear[k] += f.properties.acres || 0;
       firesByYear[k]++;                    // counted even when its acreage is missing
+      if (f.properties.sev_ok) sevByYear[k]++;
     }
   } else {
     // Tiled: a vector source only ever holds what is on screen, so there is nothing here to
@@ -1763,8 +1776,16 @@ bootstrap.then(({ fc, summary }) => {
     years = summary.years;
     firesByYear = summary.fires;
     acresByYear = summary.acres;
+    sevByYear = summary.sev || [];
   }
   N = years.length;
+  // A year with no severity at all is an upstream gap if it is old, and simply the assessment
+  // lag if it is recent — MTBS runs a season or two behind. The newest two years therefore get
+  // the benefit of the doubt, so a season that has only just landed is never accused of being
+  // broken. Guarded on length: a summary predating the `sev` array should accuse nobody.
+  sevGap = sevByYear.length === N
+    ? new Set(years.filter((y, k) => !sevByYear[k] && y < years[N - 1] - 1))
+    : new Set();
 
   if (TILES) {
     map.addSource('fires', { type: 'vector', url: 'pmtiles://' + TILES });
