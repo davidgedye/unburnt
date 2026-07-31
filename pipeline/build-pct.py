@@ -17,11 +17,11 @@ parses every trkseg of a trk into one MultiLineString and draws no line across a
 orientation never has to be worked out and no join can be invented that is not in the data.
 Measured identical to the stitched version at 2,622.8 miles.
 
-Two outputs:
-  pct/<section>.gpx        full resolution, 258,096 points, ~12.6 MB. Not shipped -- these are
-                           for carrying, or for dropping into the map by hand.
-  app/data/pct.geojson.gz  simplified to ~10 m, ~300 KB, one feature per section. What the 'p'
-                           easter egg fetches.
+Two outputs, both under app/ so both deploy:
+  app/pct/<section>.gpx    full resolution, 258,096 points, ~13 MB across 29 files, served at
+                           /pct/<section>.gpx -- for carrying, or for dropping back into the map.
+  app/data/pct.geojson.gz  the same trail simplified to ~10 m, ~300 KB, one feature per section.
+                           What the 'p' easter egg fetches.
 
 Usage: build-pct.py            # uses cached OSM responses if present, else fetches
        build-pct.py --refresh  # re-fetch from OSM
@@ -30,7 +30,7 @@ import gzip, json, math, os, sys, html, urllib.request, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.join(ROOT, 'pipeline', 'data', 'pct')
-GPX_DIR = os.path.join(ROOT, 'pct')
+GPX_DIR = os.path.join(ROOT, 'app', 'pct')
 BUNDLE = os.path.join(ROOT, 'app', 'data', 'pct.geojson.gz')
 REL = 1225378
 UA = 'unburnt/1.0 (https://github.com/davidgedye/unburnt)'
