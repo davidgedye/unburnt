@@ -75,7 +75,12 @@ build_year() {
   # be about (#16).
   log "$y  perimeters"
   rm -f "$WORK/p.geojson"
-  ogr2ogr -f GeoJSON "$WORK/p.geojson" -t_srs EPSG:4326 \
+  # -makevalid because MTBS ships some perimeters inside-out: NORTH 2020 has a self-intersection
+  # and a *negative* area, so tippecanoe rendered 3 vertices of a 6,827-acre fire and dropped it
+  # entirely at z13 (#24). Repair costs almost nothing — across 2020 it touched 7 of 366
+  # geometries and moved the year's total vertex count by 0.6%. -nlt MULTIPOLYGON because
+  # MakeValid can return a collection, which the writer would otherwise force-cast to a Polygon.
+  ogr2ogr -f GeoJSON "$WORK/p.geojson" -t_srs EPSG:4326 -makevalid -nlt MULTIPOLYGON \
     -lco COORDINATE_PRECISION=6 -lco RFC7946=NO \
     -sql "SELECT event_id AS id, incid_name AS name, incid_type AS type, ig_date,
                  burnbndac AS acres, CAST(SUBSTR(ig_date,1,4) AS integer) AS year
