@@ -245,6 +245,11 @@
       filter: drop-shadow(0 1px 2px rgba(0,0,0,.85));
       pointer-events: none;              /* the map underneath stays clickable through it */
     }
+    /* Above the title panel (z-index 2). Placement keeps the popup off the panel wherever it
+       can, but a fire *inside* the panel's footprint has nowhere clear to go — and a popup you
+       asked for, which dismisses on the next click, should win over chrome that is always
+       there. Below #about (4), which is a deliberate read rather than a glance. */
+    .maplibregl-popup { z-index: 3; }
     .maplibregl-popup-content { background: #12161d; color: var(--ink);
       border-radius: 8px; border: 1px solid rgba(255,255,255,.12); }
     .maplibregl-popup-content b { color: #fff; }
@@ -1131,8 +1136,12 @@ function showTrackPopup(feature, lngLat) {
   // much of it has burned, and which fires did it.
   const burnt = p.pct > 0 ? `${p.pct}% burned since 1984` : 'no mapped fire since 1984';
   const which = p.burned ? `<br><span class="trk-tag">${esc(p.burned)}</span>` : '';
-  popup = new maplibregl.Popup({ anchor: 'bottom', offset: GAP }).setLngLat(lngLat)
-    .setHTML(`<b>${esc(p.name)}</b><br>${p.miles.toFixed(1)} miles<br>${burnt}${which}`)
+  const html = `<b>${esc(p.name)}</b><br>${p.miles.toFixed(1)} miles<br>${burnt}${which}`;
+  // Placed the same way a fire's is: a track can run under the title panel too, and a long one
+  // has a shape worth keeping clear of.
+  const at = popupPlacement(feature, lngLat, html);
+  popup = new maplibregl.Popup({ anchor: at.anchor, offset: GAP }).setLngLat(at.lngLat)
+    .setHTML(html)
     .addTo(map);
 }
 
@@ -1586,11 +1595,67 @@ function syncURL() {
   }, 200);
 }
 
-// Keep the panel off the burn it describes. The fire's screen bounding box decides which side
-// has room; anchor names are where the *popup's* own edge sits, so 'bottom' puts it above the
-// shape, 'top' below, 'right' to the left, 'left' to the right.
-const POPUP_W = 240, POPUP_H = 96, GAP = 14, RAIL_W = 56;
-function popupPlacement(feature, fallback) {
+// Where to put the popup so it neither hides the burn it describes nor disappears behind the
+// furniture. The old version only knew about the viewport edges and the rail, so on a phone —
+// where the title panel is a third of the screen — "above the fire" routinely meant "behind the
+// title panel" (#20). And when nothing fitted it gave up and anchored above the click, which is
+// the worst answer available: that is where the panel is.
+//
+// So: score candidates instead of taking the first that fits. Leaving the viewport is
+// disqualifying, covering a panel is heavily penalised, covering the fire is mildly penalised.
+// A fire too big to sit beside therefore lands *on* the fire but clear of the panels, which is
+// the right trade rather than a failure — there is no off-fire space to find.
+const POPUP_MAX_W = 240, GAP = 14;
+// Anchor names say which edge of the popup touches the point, so 'bottom' puts it above.
+// Each returns the popup box's top-left for a point, size and gap.
+const ANCHORS = {
+  'bottom':       (x, y, w, h) => [x - w / 2, y - h - GAP],
+  'top':          (x, y, w, h) => [x - w / 2, y + GAP],
+  'right':        (x, y, w, h) => [x - w - GAP, y - h / 2],
+  'left':         (x, y, w, h) => [x + GAP, y - h / 2],
+  'bottom-right': (x, y, w, h) => [x - w - GAP, y - h - GAP],
+  'bottom-left':  (x, y, w, h) => [x + GAP, y - h - GAP],
+  'top-right':    (x, y, w, h) => [x - w - GAP, y + GAP],
+  'top-left':     (x, y, w, h) => [x + GAP, y + GAP],
+};
+// Reading order, and vertical displacement hides less of the map than horizontal.
+const ANCHOR_ORDER = ['bottom', 'top', 'right', 'left',
+                      'bottom-right', 'bottom-left', 'top-right', 'top-left'];
+
+// Measured, not assumed. A fire's popup is three lines or six depending on whether severity is
+// mapped and whether it was prescribed, and a height wrong by two lines is a collision the
+// placement cannot see. One hidden node, reused, carrying the popup's own class so it inherits
+// the same padding and type.
+let sizer = null;
+function popupSize(html) {
+  if (!sizer) {
+    sizer = document.createElement('div');
+    sizer.className = 'maplibregl-popup-content';
+    sizer.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden;' +
+                          'pointer-events:none;white-space:normal';
+    document.body.appendChild(sizer);
+  }
+  sizer.style.maxWidth = POPUP_MAX_W + 'px';
+  sizer.innerHTML = html;
+  const r = sizer.getBoundingClientRect();
+  return [Math.ceil(r.width), Math.ceil(r.height) + 10];   // +tip
+}
+
+const overlap = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]))
+                        * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+
+function obstacles() {
+  const out = [];
+  for (const id of ['title', 'rail']) {
+    const el = document.getElementById(id);
+    if (!el || el.hidden) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width && r.height) out.push([r.left, r.top, r.right, r.bottom]);
+  }
+  return out;
+}
+
+function popupPlacement(feature, fallback, html) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, n = 0;
   const visit = c => {
     if (typeof c[0] === 'number') {
@@ -1605,22 +1670,39 @@ function popupPlacement(feature, fallback) {
   if (feature?.geometry) visit(feature.geometry.coordinates);
   // A FeatureCollection: the tiled path hands over the clicked fire as its rendered pieces.
   else if (feature?.features) for (const f of feature.features) visit(f.geometry.coordinates);
-  if (!n) return { lngLat: fallback, anchor: 'bottom' };
 
   const W = innerWidth, H = innerHeight;
-  const room = { bottom: minY - GAP, top: H - maxY - GAP,
-                 right: minX - GAP, left: W - RAIL_W - maxX - GAP };
-  const need = { bottom: POPUP_H, top: POPUP_H, right: POPUP_W, left: POPUP_W };
-  // Above, then below, then the sides — reading order, and vertical displacement hides less map.
-  const pick = ['bottom', 'top', 'right', 'left'].find(a => room[a] >= need[a]);
-  if (!pick) return { lngLat: fallback, anchor: 'bottom' };   // a burn filling the screen
+  const [w, h] = popupSize(html);
+  const walls = obstacles();
+  const at = map.project(fallback);
+  const fire = n ? [minX, minY, maxX, maxY] : null;
 
-  // Centre along the shared edge, pulled back far enough that the panel stays on screen when
-  // the fire runs off it.
-  const cx = Math.min(Math.max((minX + maxX) / 2, POPUP_W / 2 + GAP), W - RAIL_W - POPUP_W / 2 - GAP);
-  const cy = Math.min(Math.max((minY + maxY) / 2, POPUP_H / 2 + GAP), H - POPUP_H / 2 - GAP);
-  const at = { bottom: [cx, minY], top: [cx, maxY], right: [minX, cy], left: [maxX, cy] }[pick];
-  return { lngLat: map.unproject(at), anchor: pick };
+  // Candidates: the midpoint of each edge of the burn with the anchor that puts the popup on
+  // that side, plus the click itself with every anchor — which is all there is to try when the
+  // burn covers the screen, or when it was a track rather than a shape.
+  const cands = [];
+  if (fire) {
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    cands.push([cx, minY, 'bottom'], [cx, maxY, 'top'], [minX, cy, 'right'], [maxX, cy, 'left']);
+  }
+  for (const a of ANCHOR_ORDER) cands.push([at.x, at.y, a]);
+
+  let best = null;
+  cands.forEach(([x, y, a], i) => {
+    const [bx, by] = ANCHORS[a](x, y, w, h);
+    const box = [bx, by, bx + w, by + h];
+    // Outside the viewport is disqualifying rather than merely costly: a popup half off the
+    // screen cannot be read at all, where one over the fire still can.
+    if (bx < 4 || by < 4 || box[2] > W - 4 || box[3] > H - 4) return;
+    let cost = 0;
+    for (const o of walls) cost += overlap(box, o) * 100;
+    if (fire) cost += overlap(box, fire);
+    cost += ANCHOR_ORDER.indexOf(a) + i * 0.01;         // ties go to the earlier, tidier choice
+    if (!best || cost < best.cost) best = { cost, x, y, a };
+  });
+
+  if (!best) return { lngLat: fallback, anchor: 'bottom' };   // nothing fits; MapLibre will cope
+  return { lngLat: map.unproject([best.x, best.y]), anchor: best.a };
 }
 
 function wireControls() {
@@ -1812,7 +1894,7 @@ function wireControls() {
     }
     map.setPaintProperty('sel-line', 'line-opacity', rep ? 0.95 : 0);
     map.getSource('sel').setData(feature ?? NOTHING);
-    const { lngLat, anchor } = popupPlacement(feature, e.lngLat);
+    const { lngLat, anchor } = popupPlacement(feature, e.lngLat, html);
     popup = new maplibregl.Popup({ anchor, offset: GAP }).setLngLat(lngLat)
       .setHTML(html)
       .addTo(map);
