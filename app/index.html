@@ -976,7 +976,7 @@ function longDate(iso) {
 
 // Removing the popup fires its close handler, which clears the outline — so this takes down
 // both. Safe to call when nothing is open.
-function closePopup() { if (popup) { popup.remove(); popup = null; } selYear = null; }
+function closePopup() { if (popup) { popup.remove(); popup = null; } selYear = null; shownId = null; }
 
 // --- Severity overlay -------------------------------------------------------
 // Clearing is separate from closePopup(): the popup can go without the overlay going (a click
@@ -996,6 +996,8 @@ function mask(k, keep) {
   const ids = [layers[k], rxLayers[k]];
   sevMask = { ids, filters: ids.map(i => map.getFilter(i)) };
   ids.forEach((i, n) => map.setFilter(i, ['all', sevMask.filters[n], keep]));
+  // Whatever was just hidden has to stay hittable: the same year, minus the exclusion.
+  map.setFilter(HIT_LAYER, ['all', ['==', ['get', 'year'], years[k]], ['!', keep]]);
 }
 // One fire, when Accumulation paints a click. Every mapped fire, when Single Year paints the
 // whole season — otherwise severity would sit on top of the flare fill and the barely-burned
@@ -1005,6 +1007,7 @@ const maskMapped = k => mask(k, ['!=', ['get', 'sev_ok'], true]);
 function unmaskFire() {
   if (!sevMask) return;
   sevMask.ids.forEach((i, n) => map.setFilter(i, sevMask.filters[n]));
+  map.setFilter(HIT_LAYER, ['==', ['get', 'id'], '']);
   sevMask = null;
 }
 
@@ -1192,8 +1195,11 @@ let sevShown = null;                     // the fire id whose overlay is on the 
 let sevAll = false;                      // or: the whole season's, in Single Year
 // The year of the fire currently being looked at, so switching to Single Year lands on it (#25).
 let selYear = null;
+// Which fire the popup is describing, so clicking it again dismisses rather than redraws.
+let shownId = null;
 
 const TRACK_SRC = 'tracks', TRACK_LAYER = 'track-line', TRACK_CASE = 'track-case';
+const HIT_LAYER = 'yr-hit';   // transparent, queried, never masked — see mask()
 // Basemap features that belong above the fire fills rather than under them, in stacking order.
 // Named once because two things need them: the lift below, and the severity layers, which have
 // to be re-inserted beneath them whenever the year's source is swapped.
@@ -1741,7 +1747,7 @@ function wireControls() {
     addFiles(e.dataTransfer.files);
   });
 
-  const queryLayers = layers.concat(rxLayers);   // both hues are clickable/hoverable alike
+  const queryLayers = layers.concat(rxLayers, [HIT_LAYER]);  // both hues, plus the masked
   // Whatever is actually drawn is what answers a click: the year layers on the timeline, the
   // repeat counts in repeat mode (where the year layers are a backdrop, not the subject).
   // repLayers/repRings are indexed *by count*, so they are sparse — the query API needs a dense
@@ -1834,9 +1840,18 @@ function wireControls() {
     if (trk) { closePopup(); showTrackPopup(trk, e.lngLat); return; }
     // Close first: removing a popup fires its close handler, which clears the outline. Doing it
     // before the new one is drawn stops the old handler wiping the new selection.
+    const p0 = hits.length ? hits[0].properties : null;
+    // A second click on the same fire puts the popup back down rather than redrawing it — the
+    // popup is a toggle on one fire, which is what a tap on it reads as.
+    const again = popup && p0 && shownId === (p0.id ?? p0.rid);
     closePopup();
-    if (!hits.length) { if (mode !== 'year') clearSeverity(); selYear = null; return; }
-    const p = hits[0].properties;
+    if (again || !hits.length) {
+      if (mode !== 'year') clearSeverity();
+      selYear = null; shownId = null;
+      return;
+    }
+    shownId = p0.id ?? p0.rid;
+    const p = p0;
     // On the timeline, always three lines: name, date, acreage. Assessment is dropped — 62% are
     // "Initial" and the word carries almost no information. Type is dropped too *unless* it's
     // the one worth knowing: a prescribed burn, already called out by its purple hue, gets a
@@ -1898,7 +1913,12 @@ function wireControls() {
     popup = new maplibregl.Popup({ anchor, offset: GAP }).setLngLat(lngLat)
       .setHTML(html)
       .addTo(map);
-    popup.on('close', () => { map.getSource('sel')?.setData(NOTHING); clearSeverity(); });
+    // Single Year's severity belongs to the season, not to the popup, so closing one must not
+    // take it down. Everywhere else the overlay was the click's, and goes with it.
+    popup.on('close', () => {
+      map.getSource('sel')?.setData(NOTHING);
+      if (mode !== 'year') clearSeverity();
+    });
   });
 }
 
@@ -2008,6 +2028,16 @@ bootstrap.then(({ summary }) => {
       filter: ['all', ['==', ['get', 'year'], y], isRx],
       paint: { 'fill-color': RX_COLOR[AGES - 1], 'fill-opacity': 0 }
     });
+  });
+
+  // Masking a fire out of its year's fill — so severity can show the map through its holes —
+  // also takes it out of queryRenderedFeatures: unclickable, no hover cursor, and no geometry
+  // for the selection outline. So a transparent twin carries the hit test. Same source, zero
+  // opacity, never masked; a zero-opacity fill is still queried, which is the whole point.
+  map.addLayer({
+    id: HIT_LAYER, type: 'fill', source: 'fires', ...SRC_LAYER,
+    filter: ['==', ['get', 'id'], ''],          // nothing, until a mask puts something in it
+    paint: { 'fill-color': '#000', 'fill-opacity': 0 }
   });
 
   // A thin outline on the fires that have severity data, one static layer per year so the
